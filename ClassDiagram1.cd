@@ -1,0 +1,172 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ClassDiagram MajorVersion="1" MinorVersion="1">
+  <Class Name="GameProj.GameEvent" Collapsed="true">
+    <Position X="6.25" Y="8.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.InteractionEvent" Collapsed="true">
+    <Position X="6.25" Y="9.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.Vector2D" Collapsed="true">
+    <Position X="1.75" Y="7.25" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAACAAAAAAE8AUAAABAAQAAAIBAAAAAAAAAYAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.FSM&lt;TState, TEvent&gt;" Collapsed="true">
+    <Position X="1.75" Y="8.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAQABAAAAAAAAAAAAAAQACAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.State&lt;TState, TEvent&gt;" Collapsed="true">
+    <Position X="3.75" Y="10" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAQCAAAAAIAEAAAAAAhQABAAACAEAACAIAAAAACAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.LambdaTrigger" Collapsed="true" BaseTypeListCollapsed="true">
+    <Position X="3" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAACAAAAAAAAAAAAEAAAAAAAAQAAAAAIAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+    <Lollipop Position="0.2" />
+  </Class>
+  <Class Name="GameProj.Cell" Collapsed="true">
+    <Position X="3.75" Y="8.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAACAAAAAAAAAJAAAAAAAAgAAAAAAAAAAQAAAgIAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.GameGrid" Collapsed="true">
+    <Position X="1.75" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAEEAACABAAAAAAACIAAAEAAAAAAAAAAAAAAAAIAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.Character" Collapsed="true">
+    <Position X="5.25" Y="2.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AQQCCAAAAIAAAACkAEQAKYABIIBAAQABIAQAggAEAAg=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.Inventory" Collapsed="true">
+    <Position X="1.75" Y="10" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAgAAAAAACIAAAAAAAAAAABEAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.Item" Collapsed="true">
+    <Position X="3.5" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAACAAAAAQAgAAAEAAAAAAQAAABEAAAQBAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.Player" Collapsed="true">
+    <Position X="7.25" Y="2.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.NPC" Collapsed="true">
+    <Position X="5.25" Y="3.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAQAAAAAAAAACAAAAAAAAAAAIAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.Dragon" Collapsed="true">
+    <Position X="7.5" Y="5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAABAAg=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.Ally" Collapsed="true">
+    <Position X="5.25" Y="5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>QEQABAAEAAAAAASAIAIAECAAIgAAAAFAAAAAAAAAAAE=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.AnimatedSprite" Collapsed="true">
+    <Position X="1.75" Y="6.25" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAEAAAAAAAAAAAAAAAAABBACAAAAAAAAAAAAAIAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.MainWindow" Collapsed="true" BaseTypeListCollapsed="true">
+    <Position X="9" Y="6.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AACCAAAQAAAAAAAAAEEACAAgAAAAAAACAAAQAAAAAAA=</HashCode>
+      <FileName>MainWindow.xaml.cs</FileName>
+    </TypeIdentifier>
+    <Lollipop Position="0.2" Collapsed="true" />
+  </Class>
+  <Class Name="GameProj.GameManager" Collapsed="true">
+    <Position X="3.5" Y="6.25" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>ABYAIgCAAYBAEKFAAMREChECAAIABEgKASAAAAMAoJA=</HashCode>
+      <FileName>GameCore.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="GameProj.GameCanvas" Collapsed="true" BaseTypeListCollapsed="true">
+    <Position X="7.25" Y="6.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>EBARAACACACAAAAgQAAAiIBCAAIAAEAAAAIAAAAAgEA=</HashCode>
+      <FileName>GameCanvas.xaml.cs</FileName>
+    </TypeIdentifier>
+    <Lollipop Position="0.2" Collapsed="true" />
+  </Class>
+  <Class Name="System.Object" Collapsed="true">
+    <Position X="0.5" Y="0.5" Width="1.5" />
+    <TypeIdentifier />
+  </Class>
+  <Interface Name="GameProj.IDialogueProvider" Collapsed="true">
+    <Position X="4.5" Y="12.25" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Interface>
+  <Interface Name="GameProj.ICellTrigger" Collapsed="true">
+    <Position X="2.75" Y="12.25" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAIAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Interface>
+  <Enum Name="GameProj.CharacterState" Collapsed="true">
+    <Position X="4.5" Y="13.25" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>CAAAAABAAAAAAAAAAAAAAAAgAIAAAQAAAEAASAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Enum>
+  <Enum Name="GameProj.CellType" Collapsed="true">
+    <Position X="2.75" Y="13.25" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAgAAAAAAAAAAAAAAAQAAAAAAAAAAAA=</HashCode>
+      <FileName>ObjectManajer.cs</FileName>
+    </TypeIdentifier>
+  </Enum>
+  <Font Name="Segoe UI" Size="9" />
+</ClassDiagram>
