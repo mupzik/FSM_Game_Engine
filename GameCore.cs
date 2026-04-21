@@ -1,98 +1,93 @@
-﻿using System;
+﻿using GameProj.src;
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
 using Path = System.IO.Path;
-using System.Linq;
 
 namespace GameProj
 {
-    /// <summary>
-    /// Центральный класс управления игровым процессом.
-    /// Координирует физику, состояния игры, отображение и логику FSM.
-    /// </summary>
     public class GameManager
     {
-        /// <summary>
-        /// События глобального состояния игры.
-        /// </summary>
-        public enum Event
-        {
-            Trigger,        // Активация специального триггера (убийство дракона союзником)
-            Heal,           // Найдено зелье лечения
-            Sword,          // Найден меч
-            DragonAlive,    // Дракон жив
-            DragonDead      // Дракон убит
-        }
+        public event Action OnGameOver;
+        public event Action OnWin;
 
-        /// <summary>
-        /// Глобальные состояния игры (сюжетный прогресс).
-        /// </summary>
-        public enum State_
-        {
-            Tutorial,
-            Game,
-            GameStarted,
-            HealFound,
-            SwordFound,
-            AllFound,
-            NothingFound,
-            NothingFoundEnd,
-            AllFoundEnd,
-            SwordFoundEnd,
-            HealFoundEnd,
-            AllyKillsDragon
-        }
+        public enum Event { Trigger, Heal, Sword, DragonAlive, DragonDead }
+        public enum State_ { Tutorial, Start, End }
 
-        // Основные игровые объекты
-        public Dragon _dragon;
         private readonly GameGrid _grid;
         private readonly GameCanvas _canvas;
-
-        // ФИЗИЧЕСКИЙ ДВИЖОК
         private readonly PhysicsEngine _physics;
 
-        // Системы хранения данных
-        private readonly Dictionary<string, ImageSource> _spriteCache = new Dictionary<string, ImageSource>();
+        // Кэши
+        private static readonly Dictionary<string, ImageSource> _staticSpriteCache = new Dictionary<string, ImageSource>();
+        private static readonly Dictionary<string, CroppedBitmap> _staticFrameCache = new Dictionary<string, CroppedBitmap>();
+
         private readonly List<Character> _characters = new List<Character>();
         private readonly Dictionary<Character, UIElement> _characterVisuals = new Dictionary<Character, UIElement>();
         private readonly Dictionary<(int x, int y), Image> _itemVisuals = new Dictionary<(int x, int y), Image>();
 
         private Ally _ally;
         private Player _player;
-        private List<Vector2D> _interestPoints = new List<Vector2D>();
 
         internal readonly Random _rng = new Random();
         private const int TileSize = 32;
 
-        private bool _wPressed, _aPressed, _sPressed, _dPressed;
+        // FSM
         private FSM<State_, Event> _gameFSM;
+        private bool _wPressed, _aPressed, _sPressed, _dPressed;
+
+        private readonly Dictionary<UIElement, double> _animationTime = new Dictionary<UIElement, double>();
+
+        private string _tilesPath, _spritesPath, _itemsPath;
 
         public IReadOnlyList<Character> Characters => _characters;
-        public State_ CurrentGameState => _gameFSM.CurrentState.Id;
+        public State_ CurrentGameState => _gameFSM?.CurrentState?.Id ?? State_.Tutorial;
         public GameGrid Grid => _grid;
-        internal int InterestPointsCount => _interestPoints.Count;
 
         public GameManager(GameCanvas canvas, int width, int height, Action<GameManager> mapInitializer = null)
         {
             _canvas = canvas ?? throw new ArgumentNullException(nameof(canvas));
-            _grid = new GameGrid(width, height);
+            _grid = new GameGrid(width, height, TileSize);
 
-            // Инициализация физического движка
+            string baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            if (string.IsNullOrEmpty(baseDir)) baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            _tilesPath = Path.Combine(baseDir, "Tiles");
+            _spritesPath = Path.Combine(baseDir, "Sprites");
+            _itemsPath = Path.Combine(baseDir, "Items");
+
             _physics = new PhysicsEngine(_grid);
 
-            InitializeGameFSM();
+            InitializeBaseFSM();
+
             mapInitializer?.Invoke(this);
-            PreloadSprites();
+
             DrawStaticMap();
             DrawItems();
         }
+
+        private void InitializeBaseFSM()
+        {
+            var tutorial = new State<State_, Event>(State_.Tutorial);
+            var start = new State<State_, Event>(State_.Start);
+            var end = new State<State_, Event>(State_.End);
+
+            tutorial.SetUpdate(m =>
+            {
+                if (_wPressed || _aPressed || _sPressed || _dPressed)
+                    m.SetState(start);
+            });
+
+            _gameFSM = new FSM<State_, Event>(tutorial);
+        }
+
+        public void ShakeCamera() { _canvas.TriggerShake(); }
 
         public bool HasItemsOnGround()
         {
@@ -102,66 +97,8 @@ namespace GameProj
             return false;
         }
 
-        private void InitializeGameFSM()
-        {
-            var tutorial = new State<State_, Event>(State_.Tutorial);
-            var nothingFound = new State<State_, Event>(State_.NothingFound);
-            var swordFound = new State<State_, Event>(State_.SwordFound);
-            var healFound = new State<State_, Event>(State_.HealFound);
-            var allFound = new State<State_, Event>(State_.AllFound);
-            var nothingFoundEnd = new State<State_, Event>(State_.NothingFoundEnd);
-            var swordFoundEnd = new State<State_, Event>(State_.SwordFoundEnd);
-            var healFoundEnd = new State<State_, Event>(State_.HealFoundEnd);
-            var allFoundEnd = new State<State_, Event>(State_.AllFoundEnd);
-            var allyKillsDragon = new State<State_, Event>(State_.AllyKillsDragon);
-
-            tutorial.SetUpdate(machine =>
-            {
-                if (_wPressed || _aPressed || _sPressed || _dPressed)
-                    machine.SetState(nothingFound);
-            });
-
-            tutorial.SetEventHandler((machine, ev) =>
-            {
-                if (ev == Event.Trigger) machine.SetState(allyKillsDragon);
-            });
-
-            nothingFound.SetEventHandler((machine, ev) =>
-            {
-                switch (ev)
-                {
-                    case Event.Sword: machine.SetState(swordFound); break;
-                    case Event.Heal: machine.SetState(healFound); break;
-                    case Event.DragonDead: machine.SetState(nothingFoundEnd); break;
-                    case Event.Trigger: machine.SetState(allyKillsDragon); break;
-                }
-            });
-
-            swordFound.SetEventHandler((machine, ev) =>
-            {
-                if (ev == Event.Heal) machine.SetState(allFound);
-                else if (ev == Event.DragonDead) machine.SetState(swordFoundEnd);
-                else if (ev == Event.Trigger) machine.SetState(allyKillsDragon);
-            });
-
-            healFound.SetEventHandler((machine, ev) =>
-            {
-                if (ev == Event.Sword) machine.SetState(allFound);
-                else if (ev == Event.DragonDead) machine.SetState(healFoundEnd);
-                else if (ev == Event.Trigger) machine.SetState(allyKillsDragon);
-            });
-
-            allFound.SetEventHandler((machine, ev) =>
-            {
-                if (ev == Event.DragonDead) machine.SetState(allFoundEnd);
-                else if (ev == Event.Trigger) machine.SetState(allyKillsDragon);
-            });
-
-            _gameFSM = new FSM<State_, Event>(tutorial);
-        }
-
-        public void SetDragon(Dragon dragon) => _dragon = dragon;
         public void SetAlly(Ally ally) => _ally = ally;
+        public void SetPlayer(Player player) => _player = player;
 
         public void OnTutorialKeyPress(Key key)
         {
@@ -175,71 +112,34 @@ namespace GameProj
             }
         }
 
-        public void OnItemPickedUp(string itemId, bool byAlly = false)
-        {
-            if (byAlly) return;
-            if (_gameFSM.CurrentState.Id == State_.Tutorial) return;
+        public void OnItemPickedUp(string itemId, bool byAlly = false) { }
 
-            if (itemId == "Sword") _gameFSM.HandleEvent(Event.Sword);
-            else if (itemId == "Potion") _gameFSM.HandleEvent(Event.Heal);
+        // --- УНИВЕРСАЛЬНЫЕ МЕТОДЫ ЗАГРУЗКИ (LAZY LOADING) ---
+
+        private ImageSource GetOrCreateSprite(string filePath, string debugLabel = "")
+        {
+            if (string.IsNullOrEmpty(filePath)) return null;
+
+            if (_staticSpriteCache.TryGetValue(filePath, out ImageSource cached))
+            {
+                return cached;
+            }
+
+            ImageSource result = null;
+            if (File.Exists(filePath))
+            {
+                result = LoadBitmap(filePath);
+            }
+            else
+            {
+                result = CreatePlaceholder(Colors.Gray, debugLabel);
+            }
+
+            _staticSpriteCache[filePath] = result;
+            return result;
         }
 
-        public void OnDragonKilled(bool byAlly = false)
-        {
-            if (byAlly) _gameFSM.HandleEvent(Event.Trigger);
-            else _gameFSM.HandleEvent(Event.DragonDead);
-        }
-
-        private void PreloadSprites()
-        {
-            string baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            string tilesPath = Path.Combine(baseDir, "Tiles");
-            string spritesPath = Path.Combine(baseDir, "Sprites");
-            string itemsPath = Path.Combine(baseDir, "Items");
-
-            var tileIds = new[] { "Grass", "Road", "Fence_H", "Fence_U", "Fence_Corner1", "Fence_Corner2", "2", "3", "9", "13", "Decor1", "Tree1", "Tree2" };
-            foreach (var id in tileIds)
-            {
-                string filePath = Path.Combine(tilesPath, id + ".png");
-                if (File.Exists(filePath)) _spriteCache[id] = new BitmapImage(new Uri(filePath));
-                else throw new FileNotFoundException($"Sprite file for tile '{id}' not found.", filePath);
-            }
-
-            var animIds = new[] { "MC_D_Walk", "MC_U_Walk", "MC_L_Walk", "Orc_D_Walk", "Orc_U_Walk", "Orc_L_Walk" };
-            foreach (var id in animIds)
-            {
-                string filePath = Path.Combine(spritesPath, id + ".png");
-                if (File.Exists(filePath)) _spriteCache[id] = new BitmapImage(new Uri(filePath));
-            }
-
-            var itemIds = new[] { "Sword", "Potion" };
-            foreach (var id in itemIds)
-            {
-                string filePath = Path.Combine(itemsPath, id + ".png");
-                if (File.Exists(filePath)) _spriteCache[id] = new BitmapImage(new Uri(filePath));
-                else
-                {
-                    var drawing = new GeometryDrawing { Brush = Brushes.Gray, Geometry = new EllipseGeometry(new Point(8, 8), 8, 8) };
-                    _spriteCache[id] = new DrawingImage(drawing);
-                }
-            }
-
-            var bossAnimIds = new[] { "Boss_idle", "Boss_attack", "Boss_death" };
-            foreach (var id in bossAnimIds)
-            {
-                string filePath = Path.Combine(spritesPath, id + ".png");
-                if (File.Exists(filePath)) _spriteCache[id] = new BitmapImage(new Uri(filePath));
-                else
-                {
-                    var drawing = new GeometryDrawing { Brush = Brushes.Red, Geometry = new EllipseGeometry(new Point(24, 24), 20, 20) };
-                    _spriteCache[id] = new DrawingImage(drawing);
-                }
-            }
-        }
-
-        public void AddInterestPoint(Vector2D point) => _interestPoints.Add(point);
-
-        private ImageSource GetSprite(string spriteId) => _spriteCache.TryGetValue(spriteId, out var sprite) ? sprite : null;
+        // --- ОТРИСОВКА ---
 
         private void DrawStaticMap()
         {
@@ -249,16 +149,40 @@ namespace GameProj
                 for (int y = 0; y < _grid.Height; y++)
                 {
                     var cell = _grid[x, y];
-                    var bgImage = new Image { Width = TileSize, Height = TileSize, Source = GetSprite(cell.BackgroundSpriteId) };
-                    Canvas.SetLeft(bgImage, x * TileSize);
-                    Canvas.SetTop(bgImage, y * TileSize);
-                    _canvas.GameArea.Children.Add(bgImage);
 
-                    if (!string.IsNullOrEmpty(cell.DecorSpriteId))
+                    string bgPath = !string.IsNullOrEmpty(cell.BackgroundSpriteId)
+                        ? Path.Combine(_tilesPath, cell.BackgroundSpriteId + ".png")
+                        : null;
+
+                    if (bgPath == null || !File.Exists(bgPath))
                     {
-                        var decorImage = new Image { Width = TileSize, Height = TileSize, Source = GetSprite(cell.DecorSpriteId) };
+                        if (!string.IsNullOrEmpty(cell.BackgroundSpriteId))
+                            bgPath = Path.Combine(_tilesPath, cell.BackgroundSpriteId + ".png");
+                    }
+
+                    ImageSource bgSource = GetOrCreateSprite(bgPath, "BG");
+
+                    if (bgSource != null)
+                    {
+                        var bgImage = new Image { Width = TileSize, Height = TileSize, Source = bgSource };
+                        Canvas.SetLeft(bgImage, x * TileSize);
+                        Canvas.SetTop(bgImage, y * TileSize);
+                        Canvas.SetZIndex(bgImage, 0);
+                        _canvas.GameArea.Children.Add(bgImage);
+                    }
+
+                    string decorPath = !string.IsNullOrEmpty(cell.DecorSpriteId)
+                        ? Path.Combine(_tilesPath, cell.DecorSpriteId + ".png")
+                        : null;
+
+                    ImageSource decorSource = GetOrCreateSprite(decorPath, "Decor");
+
+                    if (decorSource != null)
+                    {
+                        var decorImage = new Image { Width = TileSize, Height = TileSize, Source = decorSource };
                         Canvas.SetLeft(decorImage, x * TileSize);
                         Canvas.SetTop(decorImage, y * TileSize);
+                        Canvas.SetZIndex(decorImage, 1);
                         _canvas.GameArea.Children.Add(decorImage);
                     }
                 }
@@ -275,22 +199,28 @@ namespace GameProj
                 for (int y = 0; y < _grid.Height; y++)
                 {
                     var cell = _grid[x, y];
-                    if (cell?.ItemOnGround?.Sprite != null)
+                    if (cell?.ItemOnGround != null)
                     {
-                        var image = new Image { Width = 24, Height = 24, Source = cell.ItemOnGround.Sprite, Stretch = Stretch.Uniform };
-                        Canvas.SetLeft(image, x * TileSize + (TileSize - 24) / 2.0);
-                        Canvas.SetTop(image, y * TileSize + (TileSize - 24) / 2.0);
-                        _canvas.GameArea.Children.Add(image);
-                        _itemVisuals[(x, y)] = image;
+                        var itemSource = GetOrCreateSprite(cell.ItemOnGround.IconPath, cell.ItemOnGround.Key);
+
+                        if (itemSource != null)
+                        {
+                            var image = new Image { Width = 24, Height = 24, Source = itemSource, Stretch = Stretch.Uniform };
+                            Canvas.SetLeft(image, x * TileSize + (TileSize - 24) / 2.0);
+                            Canvas.SetTop(image, y * TileSize + (TileSize - 24) / 2.0);
+                            Canvas.SetZIndex(image, 2);
+                            _canvas.GameArea.Children.Add(image);
+                            _itemVisuals[(x, y)] = image;
+                        }
                     }
                 }
             }
         }
 
-        public void SetTile(int x, int y, CellType type, string spriteId, string decorSpriteId = null)
+        public void SetTile(int x, int y, TileType type, string spriteId, string decorSpriteId = null)
         {
             if (!_grid.InBounds(x, y)) return;
-            _grid.SetCell(x, y, type, spriteId, decorSpriteId);
+            _grid.UpdateCell(x, y, type, backgroundSpriteId: spriteId, decorSpriteId: decorSpriteId);
         }
 
         public void PlaceItem(int x, int y, Item item)
@@ -304,74 +234,63 @@ namespace GameProj
             _characters.Add(character);
             var visual = CreateCharacterVisual(character);
             _characterVisuals[character] = visual;
+            Canvas.SetZIndex(visual, 10);
             _canvas.GameArea.Children.Add(visual);
         }
 
         private UIElement CreateCharacterVisual(Character ch)
         {
-            string baseId;
-            if (ch is Player)
-                baseId = "MC";
-            else if (ch is Dragon)
-                baseId = "Boss";
-            else
-                baseId = "Orc";
-
             var image = new Image { Stretch = Stretch.None, RenderTransformOrigin = new Point(0.5, 0.5) };
-            image.Tag = baseId;
+            // Сохраняем базовое имя спрайта в Tag, чтобы использовать при отрисовке
+            // Например: "MC", "Orc", "Boss"
+            string baseName = "MC";
+            if (ch is Ally) baseName = "Orc";
+            // Если у персонажа задан SpritePath, используем его имя файла без расширения
+            if (!string.IsNullOrEmpty(ch.SpritePath))
+            {
+                baseName = Path.GetFileNameWithoutExtension(ch.SpritePath);
+            }
+
+            image.Tag = baseName;
             return image;
         }
 
-        // Словарь для отслеживания времени анимации
-        private readonly Dictionary<UIElement, double> _animationTime = new Dictionary<UIElement, double>();
 
         public void Update()
         {
-            // 1. Обновляем глобальный FSM
-            _gameFSM.Update();
-
-            // 2. Обновляем логику персонажей (ИИ меняет Velocity, но не Position напрямую)
-            foreach (var ch in _characters.ToArray())
-            {
-                if (ch.IsAlive) ch.Update();
-            }
-
-
+            _gameFSM?.Update();
+            foreach (var ch in _characters.ToArray()) { if (ch.IsAlive) ch.Update(); }
             _physics.UpdateCollisions(_characters);
 
-            // 4. Проверка подбора предметов (после движения)
+            // Подбор предметов
             foreach (var ch in _characters.ToArray())
             {
                 if (!ch.IsAlive) continue;
-
-                int cx = (int)Math.Floor(ch.Position.X);
-                int cy = (int)Math.Floor(ch.Position.Y);
-
+                int cx = (int)Math.Floor(ch.Position.X / TileSize);
+                int cy = (int)Math.Floor(ch.Position.Y / TileSize);
                 for (int dx = -1; dx <= 1; dx++)
                 {
                     for (int dy = -1; dy <= 1; dy++)
                     {
-                        int x = cx + dx;
-                        int y = cy + dy;
+                        int x = cx + dx, y = cy + dy;
                         if (!_grid.InBounds(x, y)) continue;
-
                         var cell = _grid[x, y];
                         if (cell?.ItemOnGround != null)
                         {
-                            var itemPos = new Vector2D(x + 0.5, y + 0.5);
-                            if (Vector2D.Distance(ch.Position, itemPos) <= 0.8)
+                            var itemPosPx = new Vector2D(x * TileSize + TileSize / 2.0, y * TileSize + TileSize / 2.0);
+                            if (Vector2D.Distance(ch.Position, itemPosPx) <= 40.0)
                             {
                                 var item = cell.ItemOnGround;
-                                if (ch.Inventory.TryAddItem(item.Id, 1))
+                                if (ch.Inventory.AddItem(item) >= 0)
                                 {
-                                    ch.PickupItem(item.Id);
+                                    ch.PickupItem(item.Key);
                                     cell.ItemOnGround = null;
                                     if (_itemVisuals.TryGetValue((x, y), out Image img))
                                     {
                                         _canvas.GameArea.Children.Remove(img);
                                         _itemVisuals.Remove((x, y));
                                     }
-                                    RemoveInterestPointAt(x, y);
+                                    if (ch is Player) OnItemPickedUp(item.Key, false);
                                 }
                             }
                         }
@@ -379,7 +298,7 @@ namespace GameProj
                 }
             }
 
-            // 5. Рендеринг
+            // 5. Рендеринг персонажей
             foreach (var kvp in _characterVisuals)
             {
                 var character = kvp.Key;
@@ -393,73 +312,165 @@ namespace GameProj
                 }
 
                 visual.Visibility = Visibility.Visible;
-                string baseId = (string)visual.Tag;
-                string animKey = character.GetAnimationKey(character.Velocity);
 
-                if (animKey == null) animKey = "_D_Walk";
+                // 1. Определяем базовое имя и анимацию
+                string baseId = (string)visual.Tag; // Например, "MC" или "Orc"
 
-                bool flipHorizontally = animKey == "_R_Walk";
-                if (flipHorizontally) animKey = "_L_Walk";
+                // Получаем суффикс направления из персонажа
+                string animKeySuffix = character.GetAnimationKey(character.Velocity);
 
-                string fullAnimId = baseId + animKey;
-                if (!_spriteCache.TryGetValue(fullAnimId, out ImageSource sheet)) continue;
+                // Если стоим, сохраняем последнее направление или дефолт
+                if (string.IsNullOrEmpty(animKeySuffix))
+                    animKeySuffix = "_D_Walk";
 
-                BitmapImage bitmap = sheet as BitmapImage;
-                if (bitmap == null) continue;
+                // 2. ЛОГИКА ОТЗЕРКАЛИВАНИЯ
+                // Предположение: У нас есть файлы _L_Walk (смотрит влево).
+                // Если персонаж идет вправо (_R_Walk), мы берем файл _L_Walk и отзеркаливаем его.
 
-                int frameCount = 6;
-                int frameWidth = 48;
-                int frameHeight = 48;
-                double frameDuration = 0.08;
+                bool needsFlip = false;
+                string finalAnimSuffix = animKeySuffix;
 
-                if (character is Dragon)
+                if (animKeySuffix == "_R_Walk")
                 {
-                    frameWidth = 72; frameHeight = 72; frameDuration = 0.12;
-                    switch (animKey)
+                    finalAnimSuffix = "_L_Walk"; // Подменяем на левую анимацию
+                    needsFlip = true;           // Включаем флаг отражения
+                }
+
+                // Формируем имя файла: например, "MC_L_Walk.png"
+                string animFileName = $"{baseId}{finalAnimSuffix}.png";
+                string fullAnimPath = Path.Combine(_spritesPath, animFileName);
+
+                // 3. Загрузка спрайт-листа (Sheet)
+                ImageSource sheetSource = GetOrCreateSprite(fullAnimPath);
+
+                // Fallback: если файла анимации нет, пробуем статичный спрайт (например, "MC.png")
+                if (sheetSource is DrawingImage || !File.Exists(fullAnimPath))
+                {
+                    string staticPath = Path.Combine(_spritesPath, $"{baseId}.png");
+                    sheetSource = GetOrCreateSprite(staticPath);
+                }
+
+                ImageSource currentSource = null;
+
+                if (sheetSource is BitmapSource bitmapSource)
+                {
+                    // Автоматический расчет кадров
+                    int frameCount = bitmapSource.PixelWidth / character.FrameSize;
+
+                    // Если это статичная картинка (1 кадр) или ширина совпадает с размером кадра
+                    if (frameCount <= 1 || bitmapSource.PixelWidth == character.FrameSize)
                     {
-                        case "_idle": case "_death": frameCount = 4; break;
-                        case "_attack": frameCount = 6; break;
+                        currentSource = bitmapSource;
+                    }
+                    else
+                    {
+                        // Анимация
+                        bool isMoving = character.Velocity.Length() > 0.001;
+
+                        if (!_animationTime.ContainsKey(visual)) _animationTime[visual] = 0;
+
+                        if (isMoving)
+                            _animationTime[visual] += 1.0 / 60.0;
+                        else
+                            _animationTime[visual] = 0;
+
+                        double durationPerFrame = 0.1;
+                        int frameIndex = isMoving
+                            ? (int)(_animationTime[visual] / durationPerFrame) % frameCount
+                            : 0;
+
+                        // Защита от выхода за границы
+                        if (frameIndex >= frameCount) frameIndex = frameCount - 1;
+
+                        // Ключ кэша для конкретного кадра
+                        string cacheKey = $"{fullAnimPath}:{frameIndex}";
+
+                        if (!_staticFrameCache.TryGetValue(cacheKey, out CroppedBitmap cropped))
+                        {
+                            try
+                            {
+                                int xPos = frameIndex * character.FrameSize;
+                                // Создаем вырезанный кадр
+                                cropped = new CroppedBitmap(bitmapSource, new Int32Rect(xPos, 0, character.FrameSize, character.FrameSize));
+                                cropped.Freeze(); // Замораживаем для производительности
+                                _staticFrameCache[cacheKey] = cropped;
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Ошибка обрезки спрайта: {ex.Message}");
+                            }
+                        }
+                        currentSource = cropped;
                     }
                 }
 
-                var anim = new AnimatedSprite(bitmap, frameCount, frameWidth, frameHeight, frameDuration);
-                bool isMoving = character.Velocity.Length() > 0 || character is Dragon;
+                // Fallback, если вообще ничего не загрузилось
+                if (currentSource == null)
+                {
+                    currentSource = CreatePlaceholder(Colors.Red, character.Id);
+                }
 
-                if (!_animationTime.ContainsKey(visual)) _animationTime[visual] = 0;
-                _animationTime[visual] += 1.0 / 60.0;
-                if (!isMoving) _animationTime[visual] = 0;
+                // --- ПРИМЕНЕНИЕ ИСТОЧНИКА И РАЗМЕРОВ ---
+                double displaySize = character.FrameSize;
+                visual.Source = currentSource;
+                visual.Width = displaySize;
+                visual.Height = displaySize;
+                visual.Stretch = Stretch.Uniform;
 
-                int frame = isMoving ? (int)(_animationTime[visual] / frameDuration) % frameCount : 0;
-                visual.Source = anim.GetFrame(frame);
-
+                // Позиционирование
                 var pos = character.Position;
-                double left = pos.X * TileSize + (TileSize - frameWidth) / 2.0;
-                double top = pos.Y * TileSize + (TileSize - frameHeight) / 2.0;
+                double left = pos.X - (displaySize / 2.0);
+                double top = pos.Y - (displaySize / 2.0);
                 Canvas.SetLeft(visual, left);
                 Canvas.SetTop(visual, top);
 
-                visual.RenderTransform = flipHorizontally ? new ScaleTransform(-1, 1) : null;
-            }
+                // --- ОТЗЕРКАЛИВАНИЕ (ИСПРАВЛЕННОЕ) ---
+                visual.RenderTransformOrigin = new Point(0.5, 0.5);
 
-            // 6. Логика победы (Союзник убивает дракона)
-            if (_ally != null && _dragon != null && _ally.IsAlive && _dragon.IsAlive)
-            {
-                if (_ally.Inventory.HasItem("Sword"))
+                if (needsFlip)
                 {
-                    if (Vector2D.Distance(_ally.Position, _dragon.Position) < 1.0)
-                    {
-                        _dragon.Die();
-                        OnDragonKilled(byAlly: true);
-                    }
+                    // Если нужно отзеркалить (движение вправо), применяем ScaleTransform(-1, 1)
+                    visual.RenderTransform = new ScaleTransform(-1, 1);
+                }
+                else
+                {
+                    // Иначе сбрасываем трансформацию в единичную (не null!)
+                    visual.RenderTransform = new ScaleTransform(1, 1);
                 }
             }
         }
 
+
         public bool IsWalkable(int x, int y) => _grid.IsWalkable(x, y);
 
-        public void RemoveInterestPointAt(int x, int y)
+        // --- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ---
+
+        private BitmapImage LoadBitmap(string path)
         {
-            _interestPoints.RemoveAll(pt => (int)Math.Floor(pt.X) == x && (int)Math.Floor(pt.Y) == y);
+            if (!File.Exists(path)) return null;
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.UriSource = new Uri(path);
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+
+        public void RefreshItemsVisuals()
+        {
+            DrawItems();
+        }
+
+        private ImageSource CreatePlaceholder(Color color, string label = "")
+        {
+            var drawing = new DrawingGroup();
+            drawing.Children.Add(new GeometryDrawing
+            {
+                Brush = new SolidColorBrush(color),
+                Geometry = new RectangleGeometry(new Rect(0, 0, 32, 32))
+            });
+            return new DrawingImage(drawing);
         }
     }
 
@@ -467,136 +478,151 @@ namespace GameProj
 
 
 
-    public interface ICollidable
-    {
-        Vector2D Position { get; set; }
-        Vector2D Velocity { get; set; }
-        double Size { get; } // Размер хитбокса (например, 0.6 клетки)
-        bool IsAlive { get; }
-    }
-
-    /// <summary>
-    /// Простой и надежный движок коллизий (AABB).
-    /// </summary>
     public class PhysicsEngine
     {
         private readonly GameGrid _grid;
-        private const double Epsilon = 0.0001; // Микро-зазор
+        private const double Epsilon = 0.001; // Небольшой отступ, чтобы не застревать точно на границе
+        private const int TileSize = 32;      // Размер клетки в пикселях
 
         public PhysicsEngine(GameGrid grid)
         {
-            _grid = grid;
+            _grid = grid ?? throw new ArgumentNullException(nameof(grid));
         }
 
+        /// <summary>
+        /// Основной метод обновления физики. Разделяет движение по осям для корректного скольжения вдоль стен.
+        /// </summary>
         public void UpdateCollisions(List<Character> characters)
         {
             foreach (var ch in characters)
             {
                 if (!ch.IsAlive) continue;
 
-                // Если скорость очень маленькая, обнуляем её
-                if (Math.Abs(ch.Velocity.X) < Epsilon && Math.Abs(ch.Velocity.Y) < Epsilon)
-                {
-                    ch.Velocity = Vector2D.Zero;
-                    continue;
-                }
+                // 1. Движение и коллизия по оси X
+                HandleAxisCollision(ch, isXAxis: true);
 
-                MoveWithCollision(ch);
+                // 2. Движение и коллизия по оси Y
+                HandleAxisCollision(ch, isXAxis: false);
+
+                // Если скорость очень мала, обнуляем её полностью, чтобы избежать микро-дрожания
+                if (Math.Abs(ch.Velocity.X) < Epsilon) ch.Velocity.X = 0;
+                if (Math.Abs(ch.Velocity.Y) < Epsilon) ch.Velocity.Y = 0;
             }
         }
 
-        private void MoveWithCollision(Character ch)
+        private void HandleAxisCollision(Character ch, bool isXAxis)
         {
-            double halfSize = ch.Size / 2.0;
+            // Получаем текущую скорость по нужной оси
+            double velocity = isXAxis ? ch.Velocity.X : ch.Velocity.Y;
 
-            // --- ОСЬ X ---
-            double nextX = ch.Position.X + ch.Velocity.X;
+            // Если движения нет, пропускаем расчеты
+            if (Math.Abs(velocity) < Epsilon) return;
 
-            // Границы хитбокса по X
-            double left = nextX - halfSize;
-            double right = nextX + halfSize;
+            // Предсказываем новую позицию
+            double newPosVal = (isXAxis ? ch.Position.X : ch.Position.Y) + velocity;
 
-            // Границы по Y (текущие)
-            double top = ch.Position.Y - halfSize;
-            double bottom = ch.Position.Y + halfSize;
+            // Размеры хитбокса персонажа (предполагаем квадратный хитбокс для простоты, как в вашем коде Size)
+            double size = ch.Size;
+            double halfSize = size / 2.0;
 
-            // Определяем диапазон клеток для проверки
-            // Вычитаем Epsilon у правой/нижней границы, чтобы не захватывать соседнюю клетку при идеальном касании
-            int minCol = (int)Math.Floor(left);
-            int maxCol = (int)Math.Floor(right - Epsilon);
-            int minRow = (int)Math.Floor(top);
-            int maxRow = (int)Math.Floor(bottom - Epsilon);
+            // Определяем границы персонажа (AABB) после движения по одной оси
+            // Важно: по одной оси позиция меняется, по другой остается старой
+            double left, right, top, bottom;
 
-            bool collisionX = false;
+            if (isXAxis)
+            {
+                left = newPosVal - halfSize;
+                right = newPosVal + halfSize;
+                top = ch.Position.Y - halfSize;
+                bottom = ch.Position.Y + halfSize;
+            }
+            else
+            {
+                left = ch.Position.X - halfSize;
+                right = ch.Position.X + halfSize;
+                top = newPosVal - halfSize;
+                bottom = newPosVal + halfSize;
+            }
 
+            // Находим диапазон клеток сетки, которые пересекает этот прямоугольник
+            int minCol = (int)Math.Floor(left / TileSize);
+            int maxCol = (int)Math.Floor((right - Epsilon) / TileSize); // -Epsilon чтобы не захватить соседнюю клетку при точном совпадении
+            int minRow = (int)Math.Floor(top / TileSize);
+            int maxRow = (int)Math.Floor((bottom - Epsilon) / TileSize);
+
+            bool collisionOccurred = false;
+            double resolvedPos = newPosVal;
+
+            // Перебираем все потенциально затронутые клетки
             for (int c = minCol; c <= maxCol; c++)
             {
                 for (int r = minRow; r <= maxRow; r++)
                 {
-                    if (_grid.InBounds(c, r) && !_grid[c, r].IsWalkable())
-                    {
-                        collisionX = true;
+                    // Пропускаем клетки вне карты или проходимые клетки
+                    if (!_grid.InBounds(c, r) || _grid[c, r].IsWalkable())
+                        continue;
 
-                        // Разрешение коллизии
-                        if (ch.Velocity.X > 0) // Движемся вправо -> уперлись в левую границу клетки c
+                    // Получаем AABB стены (клетки) в мировых координатах
+                    Rect wallRect = new Rect(c * TileSize, r * TileSize, TileSize, TileSize);
+
+                    // Получаем AABB персонажа (используем рассчитанные выше координаты)
+                    Rect charRect = new Rect(left, top, right - left, bottom - top);
+
+                    // Проверяем пересечение (IntersectsWith)
+                    if (wallRect.IntersectsWith(charRect))
+                    {
+                        collisionOccurred = true;
+
+                        // РАЗРЕШЕНИЕ КОЛЛИЗИИ (Resolution)
+                        if (isXAxis)
                         {
-                            nextX = c - halfSize - Epsilon;
+                            if (velocity > 0) // Движемся вправо -> упираемся в левую грань стены
+                            {
+                                resolvedPos = wallRect.Left - halfSize - Epsilon;
+                            }
+                            else // Движемся влево -> упираемся в правую грань стены
+                            {
+                                resolvedPos = wallRect.Right + halfSize + Epsilon;
+                            }
                         }
-                        else if (ch.Velocity.X < 0) // Движемся влево -> уперлись в правую границу клетки c
+                        else // Ось Y
                         {
-                            nextX = (c + 1) + halfSize + Epsilon;
+                            if (velocity > 0) // Движемся вниз -> упираемся в верхнюю грань стены
+                            {
+                                resolvedPos = wallRect.Top - halfSize - Epsilon;
+                            }
+                            else // Движемся вверх -> упираемся в нижнюю грань стены
+                            {
+                                resolvedPos = wallRect.Bottom + halfSize + Epsilon;
+                            }
                         }
-                        break;
+
                     }
                 }
-                if (collisionX) break;
             }
 
-            ch.Position.X = nextX;
-            if (collisionX) ch.Velocity = new Vector2D(0, ch.Velocity.Y);
-
-            // --- ОСЬ Y ---
-            // Используем уже обновленный X
-            double nextY = ch.Position.Y + ch.Velocity.Y;
-
-            top = nextY - halfSize;
-            bottom = nextY + halfSize;
-
-            // Границы по X (уже обновленные)
-            left = ch.Position.X - halfSize;
-            right = ch.Position.X + halfSize;
-
-            minRow = (int)Math.Floor(top);
-            maxRow = (int)Math.Floor(bottom - Epsilon);
-            int minColY = (int)Math.Floor(left);
-            int maxColY = (int)Math.Floor(right - Epsilon);
-
-            bool collisionY = false;
-
-            for (int c = minColY; c <= maxColY; c++)
+            // Применяем результаты
+            if (collisionOccurred)
             {
-                for (int r = minRow; r <= maxRow; r++)
+                if (isXAxis)
                 {
-                    if (_grid.InBounds(c, r) && !_grid[c, r].IsWalkable())
-                    {
-                        collisionY = true;
-
-                        if (ch.Velocity.Y > 0) // Вниз -> уперлись в верхнюю границу клетки r
-                        {
-                            nextY = r - halfSize - Epsilon;
-                        }
-                        else if (ch.Velocity.Y < 0) // Вверх -> уперлись в нижнюю границу клетки r
-                        {
-                            nextY = (r + 1) + halfSize + Epsilon;
-                        }
-                        break;
-                    }
+                    ch.Position.X = resolvedPos;
+                    ch.Velocity.X = 0; // Останавливаем движение по X
                 }
-                if (collisionY) break;
+                else
+                {
+                    ch.Position.Y = resolvedPos;
+                    ch.Velocity.Y = 0; // Останавливаем движение по Y
+                }
             }
-
-            ch.Position.Y = nextY;
-            if (collisionY) ch.Velocity = new Vector2D(ch.Velocity.X, 0);
+            else
+            {
+                // Если коллизий нет, применяем новую позицию
+                if (isXAxis)
+                    ch.Position.X = newPosVal;
+                else
+                    ch.Position.Y = newPosVal;
+            }
         }
     }
 }

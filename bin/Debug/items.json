@@ -1,0 +1,24 @@
+[
+  {
+    "Id": "Sword",
+    "Name": "Ржавый меч",
+    "Description": "Старый, но острый клинок.",
+    "Price": 50,
+    "IsStackable": false,
+    "Weight": 2.5,
+    "SpritePath": "Sword",
+    "UseActionType": null,
+    "UseValue": 0
+  },
+  {
+    "Id": "Potion",
+    "Name": "Зелье здоровья",
+    "Description": "Восстанавливает 10 единиц здоровья.",
+    "Price": 20,
+    "IsStackable": true,
+    "Weight": 0.3,
+    "SpritePath": "Potion",
+    "UseActionType": "Heal",
+    "UseValue": 10
+  }
+]

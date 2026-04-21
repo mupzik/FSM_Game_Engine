@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:GameProj"
         mc:Ignorable="d"
-        Title="Игра" Height="1000" Width="975" Icon="/Potion.png">
+        Title="Игра" Height="999" Width="975" Icon="/Potion.png">
     <Grid>
         <StackPanel x:Name="MainMenu" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,146,0,0" >
             <Button x:Name="BtnStart" Content="Новая игра"  Click="BtnStart_Click" Width="200" Height="50"/>

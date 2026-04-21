@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.14.36429.23 d17.14
+VisualStudioVersion = 17.14.36429.23
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameProj", "GameProj.csproj", "{4686FF75-A12A-4701-8D1F-4A7224933658}"
 EndProject
@@ -18,11 +18,9 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Элементы решения", "Элементы решения", "{D67283E7-82AA-4F47-BB3A-61F378F8496A}"
 	ProjectSection(SolutionItems) = preProject
 		bin\Debug\Sprites\MC_D_Walk.png = bin\Debug\Sprites\MC_D_Walk.png
-		bin\Debug\Sprites\MC_L_Walk.png = bin\Debug\Sprites\MC_L_Walk.png
 		bin\Debug\Sprites\MC_R_Walk.png = bin\Debug\Sprites\MC_R_Walk.png
 		bin\Debug\Sprites\MC_U_Walk.png = bin\Debug\Sprites\MC_U_Walk.png
 		bin\Debug\Sprites\Orc_D_Walk.png = bin\Debug\Sprites\Orc_D_Walk.png
-		bin\Debug\Sprites\Orc_L_Walk.png = bin\Debug\Sprites\Orc_L_Walk.png
 		bin\Debug\Sprites\Orc_R_Walk.png = bin\Debug\Sprites\Orc_R_Walk.png
 		bin\Debug\Sprites\Orc_U_Walk.png = bin\Debug\Sprites\Orc_U_Walk.png
 	EndProjectSection

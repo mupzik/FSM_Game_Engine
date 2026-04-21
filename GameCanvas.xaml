@@ -1,46 +1,31 @@
 ﻿<UserControl x:Class="GameProj.GameCanvas"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             Focusable="True"
-             Background="Black"
-             Width="1000" Height="975">
-
+             Focusable="True">
     <Grid>
-        <Canvas x:Name="GameArea" Width="1000" Height="1000" />
+        <!-- Игровая область -->
+        <Canvas x:Name="GameArea" Width="960" Height="960"/>
 
-        <!-- Слой UI: НЕ ТРОГАЕТСЯ GameManager'ом -->
-        <Border x:Name="DialogueBox"
-                Background="Black" BorderBrush="White" BorderThickness="2"
-                Padding="12" HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                Margin="0,0,0,200" Visibility="Collapsed" Width="200">
-            <TextBlock x:Name="DialogueText" Foreground="White" FontSize="16"
-                       TextWrapping="Wrap" TextAlignment="Center"/>
+        <!-- UI Overlay -->
+        <StackPanel Margin="10">
+            <TextBlock x:Name="GameStateDisplay" Foreground="White" FontSize="14"/>
+            <TextBlock x:Name="PlayerInventory" Foreground="White" FontSize="12"/>
+            <TextBlock x:Name="AllyInventory" Foreground="White" FontSize="12"/>
+        </StackPanel>
+
+        <!-- Подсказка обучения -->
+        <Border x:Name="TutorialHint" Background="#80000000" Padding="10" 
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="20">
+            <TextBlock Text="WASD — движение, E — взаимодействие, ESC — меню" 
+                       Foreground="White" FontSize="14"/>
         </Border>
 
-        <TextBlock x:Name="InteractHint"
-                   Text="Нажмите [E] чтобы поговорить"
-                   Foreground="Yellow" FontSize="16" FontWeight="Bold"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                   Visibility="Collapsed"/>
-
-        <TextBlock x:Name="TutorialHint"
-                   Text="Используйте W, A, S, D чтобы двигаться"
-                   Foreground="Yellow" FontSize="18" FontWeight="Bold"
-                   HorizontalAlignment="Center" VerticalAlignment="Top"
-                   Margin="0,581,0,0" Visibility="Visible"/>
-
-        <Border Background="#33000000" CornerRadius="8"
-                Width="357" Height="160"
-                HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="0,10,10,0">
-            <StackPanel Margin="10">
-                <TextBlock x:Name="GameStateDisplay" Foreground="White" FontSize="16" FontWeight="Bold"
-                           Text="Состояние: Обучение" />
-                <TextBlock x:Name="PlayerInventory" Foreground="LimeGreen" FontSize="14"
-                           Text="Игрок: Меч: ❌, Лекарство: ❌" Margin="0,8,0,0"/>
-                <TextBlock x:Name="AllyInventory" Foreground="Cyan" FontSize="14"
-                           Text="Ally: Меч: ❌, Лекарство: ❌" Margin="0,4,0,0"/>
-            </StackPanel>
+        <!-- Окно диалога -->
+        <Border x:Name="DialogueBox" Background="#CC000000" Padding="15" 
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="20,80"
+                Visibility="Collapsed" CornerRadius="5">
+            <TextBlock x:Name="DialogueText" Foreground="White" FontSize="16" 
+                       MaxWidth="400" TextWrapping="Wrap"/>
         </Border>
     </Grid>
 </UserControl>
