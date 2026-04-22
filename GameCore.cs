@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -21,23 +22,38 @@ namespace GameProj
         public enum Event { Trigger, Heal, Sword, DragonAlive, DragonDead }
         public enum State_ { Tutorial, Start, End }
 
+        // Константы
+        private const int TileSize = 32;
+        private const double Epsilon = 0.001;
+        private const double PickupDistance = 40.0;
+        private const double AnimationFrameTime = 0.1;
+        private const int ItemIconSize = 24;
+        private const double DefaultFrameDuration = 1.0 / 60.0;
+
+        private static readonly Color PlaceholderBackground = Colors.Gray;
+        private static readonly Color PlaceholderError = Colors.Red;
+
         private readonly GameGrid _grid;
         private readonly GameCanvas _canvas;
         private readonly PhysicsEngine _physics;
 
-        // Кэши
-        private static readonly Dictionary<string, ImageSource> _staticSpriteCache = new Dictionary<string, ImageSource>();
-        private static readonly Dictionary<string, CroppedBitmap> _staticFrameCache = new Dictionary<string, CroppedBitmap>();
+        // Оптимизированные кэши
+        private static readonly Dictionary<string, ImageSource> _spriteCache = new Dictionary<string, ImageSource>();
+        private static readonly Dictionary<string, CroppedBitmap> _frameCache = new Dictionary<string, CroppedBitmap>();
+        private static readonly ScaleTransform _flipTransform = new ScaleTransform(-1, 1);
+        private static readonly ScaleTransform _normalTransform = new ScaleTransform(1, 1);
 
         private readonly List<Character> _characters = new List<Character>();
         private readonly Dictionary<Character, UIElement> _characterVisuals = new Dictionary<Character, UIElement>();
         private readonly Dictionary<(int x, int y), Image> _itemVisuals = new Dictionary<(int x, int y), Image>();
 
+        // Оптимизированный список предметов на земле
+        private readonly List<GroundItem> _groundItems = new List<GroundItem>();
+
         private Ally _ally;
         private Player _player;
 
         internal readonly Random _rng = new Random();
-        private const int TileSize = 32;
 
         // FSM
         private FSM<State_, Event> _gameFSM;
@@ -45,7 +61,7 @@ namespace GameProj
 
         private readonly Dictionary<UIElement, double> _animationTime = new Dictionary<UIElement, double>();
 
-        private string _tilesPath, _spritesPath, _itemsPath;
+        private readonly string _tilesPath, _spritesPath, _itemsPath;
 
         public IReadOnlyList<Character> Characters => _characters;
         public State_ CurrentGameState => _gameFSM?.CurrentState?.Id ?? State_.Tutorial;
@@ -89,13 +105,7 @@ namespace GameProj
 
         public void ShakeCamera() { _canvas.TriggerShake(); }
 
-        public bool HasItemsOnGround()
-        {
-            for (int x = 0; x < _grid.Width; x++)
-                for (int y = 0; y < _grid.Height; y++)
-                    if (_grid[x, y]?.ItemOnGround != null) return true;
-            return false;
-        }
+        public bool HasItemsOnGround() => _groundItems.Count > 0;
 
         public void SetAlly(Ally ally) => _ally = ally;
         public void SetPlayer(Player player) => _player = player;
@@ -114,76 +124,97 @@ namespace GameProj
 
         public void OnItemPickedUp(string itemId, bool byAlly = false) { }
 
-        // --- УНИВЕРСАЛЬНЫЕ МЕТОДЫ ЗАГРУЗКИ (LAZY LOADING) ---
-
-        private ImageSource GetOrCreateSprite(string filePath, string debugLabel = "")
+        // --- ОПТИМИЗИРОВАННЫЕ МЕТОДЫ ЗАГРУЗКИ ---
+        private ImageSource GetOrCreateSprite(string filePath)
         {
             if (string.IsNullOrEmpty(filePath)) return null;
 
-            if (_staticSpriteCache.TryGetValue(filePath, out ImageSource cached))
-            {
+            if (_spriteCache.TryGetValue(filePath, out ImageSource cached))
                 return cached;
-            }
 
-            ImageSource result = null;
-            if (File.Exists(filePath))
-            {
-                result = LoadBitmap(filePath);
-            }
-            else
-            {
-                result = CreatePlaceholder(Colors.Gray, debugLabel);
-            }
-
-            _staticSpriteCache[filePath] = result;
+            ImageSource result = File.Exists(filePath) ? LoadBitmap(filePath) : CreatePlaceholder(PlaceholderBackground);
+            _spriteCache[filePath] = result;
             return result;
         }
 
-        // --- ОТРИСОВКА ---
+        private CroppedBitmap GetOrCreateFrame(string spritePath, int frameIndex, int frameSize, BitmapSource sheetSource = null)
+        {
+            string cacheKey = $"{spritePath}:{frameIndex}";
 
+            if (_frameCache.TryGetValue(cacheKey, out CroppedBitmap cached))
+                return cached;
+
+            if (sheetSource == null)
+            {
+                var source = GetOrCreateSprite(spritePath) as BitmapSource;
+                if (source == null) return null;
+                sheetSource = source;
+            }
+
+            try
+            {
+                int xPos = frameIndex * frameSize;
+                var cropped = new CroppedBitmap(sheetSource, new Int32Rect(xPos, 0, frameSize, frameSize));
+                cropped.Freeze();
+                _frameCache[cacheKey] = cropped;
+                return cropped;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка обрезки спрайта: {ex.Message}");
+                return null;
+            }
+        }
+
+        // --- ОТРИСОВКА ---
         private void DrawStaticMap()
         {
             _canvas.GameArea.Children.Clear();
+
             for (int x = 0; x < _grid.Width; x++)
             {
                 for (int y = 0; y < _grid.Height; y++)
                 {
                     var cell = _grid[x, y];
 
-                    string bgPath = !string.IsNullOrEmpty(cell.BackgroundSpriteId)
-                        ? Path.Combine(_tilesPath, cell.BackgroundSpriteId + ".png")
-                        : null;
-
-                    if (bgPath == null || !File.Exists(bgPath))
+                    // Фон
+                    if (!string.IsNullOrEmpty(cell.BackgroundSpriteId))
                     {
-                        if (!string.IsNullOrEmpty(cell.BackgroundSpriteId))
-                            bgPath = Path.Combine(_tilesPath, cell.BackgroundSpriteId + ".png");
+                        string bgPath = Path.Combine(_tilesPath, cell.BackgroundSpriteId + ".png");
+                        var bgSource = GetOrCreateSprite(bgPath);
+                        if (bgSource != null)
+                        {
+                            var bgImage = new Image
+                            {
+                                Width = TileSize,
+                                Height = TileSize,
+                                Source = bgSource
+                            };
+                            Canvas.SetLeft(bgImage, x * TileSize);
+                            Canvas.SetTop(bgImage, y * TileSize);
+                            Canvas.SetZIndex(bgImage, 0);
+                            _canvas.GameArea.Children.Add(bgImage);
+                        }
                     }
 
-                    ImageSource bgSource = GetOrCreateSprite(bgPath, "BG");
-
-                    if (bgSource != null)
+                    // Декор
+                    if (!string.IsNullOrEmpty(cell.DecorSpriteId))
                     {
-                        var bgImage = new Image { Width = TileSize, Height = TileSize, Source = bgSource };
-                        Canvas.SetLeft(bgImage, x * TileSize);
-                        Canvas.SetTop(bgImage, y * TileSize);
-                        Canvas.SetZIndex(bgImage, 0);
-                        _canvas.GameArea.Children.Add(bgImage);
-                    }
-
-                    string decorPath = !string.IsNullOrEmpty(cell.DecorSpriteId)
-                        ? Path.Combine(_tilesPath, cell.DecorSpriteId + ".png")
-                        : null;
-
-                    ImageSource decorSource = GetOrCreateSprite(decorPath, "Decor");
-
-                    if (decorSource != null)
-                    {
-                        var decorImage = new Image { Width = TileSize, Height = TileSize, Source = decorSource };
-                        Canvas.SetLeft(decorImage, x * TileSize);
-                        Canvas.SetTop(decorImage, y * TileSize);
-                        Canvas.SetZIndex(decorImage, 1);
-                        _canvas.GameArea.Children.Add(decorImage);
+                        string decorPath = Path.Combine(_tilesPath, cell.DecorSpriteId + ".png");
+                        var decorSource = GetOrCreateSprite(decorPath);
+                        if (decorSource != null)
+                        {
+                            var decorImage = new Image
+                            {
+                                Width = TileSize,
+                                Height = TileSize,
+                                Source = decorSource
+                            };
+                            Canvas.SetLeft(decorImage, x * TileSize);
+                            Canvas.SetTop(decorImage, y * TileSize);
+                            Canvas.SetZIndex(decorImage, 1);
+                            _canvas.GameArea.Children.Add(decorImage);
+                        }
                     }
                 }
             }
@@ -191,28 +222,29 @@ namespace GameProj
 
         private void DrawItems()
         {
-            foreach (var img in _itemVisuals.Values) _canvas.GameArea.Children.Remove(img);
+            foreach (var img in _itemVisuals.Values)
+                _canvas.GameArea.Children.Remove(img);
             _itemVisuals.Clear();
 
-            for (int x = 0; x < _grid.Width; x++)
+            foreach (var groundItem in _groundItems)
             {
-                for (int y = 0; y < _grid.Height; y++)
+                var itemSource = GetOrCreateSprite(groundItem.Item.IconPath);
+                if (itemSource != null)
                 {
-                    var cell = _grid[x, y];
-                    if (cell?.ItemOnGround != null)
+                    var image = new Image
                     {
-                        var itemSource = GetOrCreateSprite(cell.ItemOnGround.IconPath, cell.ItemOnGround.Key);
+                        Width = ItemIconSize,
+                        Height = ItemIconSize,
+                        Source = itemSource,
+                        Stretch = Stretch.Uniform
+                    };
 
-                        if (itemSource != null)
-                        {
-                            var image = new Image { Width = 24, Height = 24, Source = itemSource, Stretch = Stretch.Uniform };
-                            Canvas.SetLeft(image, x * TileSize + (TileSize - 24) / 2.0);
-                            Canvas.SetTop(image, y * TileSize + (TileSize - 24) / 2.0);
-                            Canvas.SetZIndex(image, 2);
-                            _canvas.GameArea.Children.Add(image);
-                            _itemVisuals[(x, y)] = image;
-                        }
-                    }
+                    double offset = (TileSize - ItemIconSize) / 2.0;
+                    Canvas.SetLeft(image, groundItem.X * TileSize + offset);
+                    Canvas.SetTop(image, groundItem.Y * TileSize + offset);
+                    Canvas.SetZIndex(image, 2);
+                    _canvas.GameArea.Children.Add(image);
+                    _itemVisuals[(groundItem.X, groundItem.Y)] = image;
                 }
             }
         }
@@ -225,7 +257,10 @@ namespace GameProj
 
         public void PlaceItem(int x, int y, Item item)
         {
-            if (_grid.InBounds(x, y)) _grid.PlaceItem(x, y, item);
+            if (!_grid.InBounds(x, y)) return;
+            _grid.PlaceItem(x, y, item);
+            _groundItems.Add(new GroundItem(x, y, item));
+            DrawItems();
         }
 
         public void AddCharacter(Character character)
@@ -240,65 +275,86 @@ namespace GameProj
 
         private UIElement CreateCharacterVisual(Character ch)
         {
-            var image = new Image { Stretch = Stretch.None, RenderTransformOrigin = new Point(0.5, 0.5) };
-            // Сохраняем базовое имя спрайта в Tag, чтобы использовать при отрисовке
-            // Например: "MC", "Orc", "Boss"
+            var image = new Image
+            {
+                Stretch = Stretch.None,
+                RenderTransformOrigin = new Point(0.5, 0.5)
+            };
+
             string baseName = "MC";
             if (ch is Ally) baseName = "Orc";
-            // Если у персонажа задан SpritePath, используем его имя файла без расширения
             if (!string.IsNullOrEmpty(ch.SpritePath))
-            {
                 baseName = Path.GetFileNameWithoutExtension(ch.SpritePath);
-            }
 
             image.Tag = baseName;
             return image;
         }
 
-
         public void Update()
         {
             _gameFSM?.Update();
-            foreach (var ch in _characters.ToArray()) { if (ch.IsAlive) ch.Update(); }
-            _physics.UpdateCollisions(_characters);
 
-            // Подбор предметов
             foreach (var ch in _characters.ToArray())
             {
+                if (ch.IsAlive)
+                    ch.Update();
+            }
+
+            _physics.UpdateCollisions(_characters);
+
+            // Оптимизированный подбор предметов
+            UpdatePickups();
+
+            // Рендеринг персонажей
+            RenderCharacters();
+        }
+
+        private void UpdatePickups()
+        {
+            var itemsToRemove = new List<GroundItem>();
+
+            foreach (var ch in _characters)
+            {
                 if (!ch.IsAlive) continue;
-                int cx = (int)Math.Floor(ch.Position.X / TileSize);
-                int cy = (int)Math.Floor(ch.Position.Y / TileSize);
-                for (int dx = -1; dx <= 1; dx++)
+
+                foreach (var groundItem in _groundItems)
                 {
-                    for (int dy = -1; dy <= 1; dy++)
+                    Vector2D itemPos = new Vector2D(
+                        groundItem.X * TileSize + TileSize / 2.0,
+                        groundItem.Y * TileSize + TileSize / 2.0
+                    );
+
+                    if (Vector2D.Distance(ch.Position, itemPos) <= PickupDistance)
                     {
-                        int x = cx + dx, y = cy + dy;
-                        if (!_grid.InBounds(x, y)) continue;
-                        var cell = _grid[x, y];
-                        if (cell?.ItemOnGround != null)
+                        if (ch.Inventory.AddItem(groundItem.Item) >= 0)
                         {
-                            var itemPosPx = new Vector2D(x * TileSize + TileSize / 2.0, y * TileSize + TileSize / 2.0);
-                            if (Vector2D.Distance(ch.Position, itemPosPx) <= 40.0)
+                            ch.PickupItem(groundItem.Item.Key);
+                            itemsToRemove.Add(groundItem);
+
+                            if (_itemVisuals.TryGetValue((groundItem.X, groundItem.Y), out Image img))
                             {
-                                var item = cell.ItemOnGround;
-                                if (ch.Inventory.AddItem(item) >= 0)
-                                {
-                                    ch.PickupItem(item.Key);
-                                    cell.ItemOnGround = null;
-                                    if (_itemVisuals.TryGetValue((x, y), out Image img))
-                                    {
-                                        _canvas.GameArea.Children.Remove(img);
-                                        _itemVisuals.Remove((x, y));
-                                    }
-                                    if (ch is Player) OnItemPickedUp(item.Key, false);
-                                }
+                                _canvas.GameArea.Children.Remove(img);
+                                _itemVisuals.Remove((groundItem.X, groundItem.Y));
                             }
+
+                            if (ch is Player)
+                                OnItemPickedUp(groundItem.Item.Key, false);
+
+                            break; // Предмет подобран, выходим из цикла
                         }
                     }
                 }
             }
 
-            // 5. Рендеринг персонажей
+            foreach (var item in itemsToRemove)
+            {
+                _groundItems.Remove(item);
+                _grid[item.X, item.Y].ItemOnGround = null;
+            }
+        }
+
+        private void RenderCharacters()
+        {
             foreach (var kvp in _characterVisuals)
             {
                 var character = kvp.Key;
@@ -313,141 +369,85 @@ namespace GameProj
 
                 visual.Visibility = Visibility.Visible;
 
-                // 1. Определяем базовое имя и анимацию
-                string baseId = (string)visual.Tag; // Например, "MC" или "Orc"
-
-                // Получаем суффикс направления из персонажа
+                string baseId = (string)visual.Tag;
                 string animKeySuffix = character.GetAnimationKey(character.Velocity);
 
-                // Если стоим, сохраняем последнее направление или дефолт
                 if (string.IsNullOrEmpty(animKeySuffix))
                     animKeySuffix = "_D_Walk";
 
-                // 2. ЛОГИКА ОТЗЕРКАЛИВАНИЯ
-                // Предположение: У нас есть файлы _L_Walk (смотрит влево).
-                // Если персонаж идет вправо (_R_Walk), мы берем файл _L_Walk и отзеркаливаем его.
-
-                bool needsFlip = false;
-                string finalAnimSuffix = animKeySuffix;
-
-                if (animKeySuffix == "_R_Walk")
-                {
-                    finalAnimSuffix = "_L_Walk"; // Подменяем на левую анимацию
-                    needsFlip = true;           // Включаем флаг отражения
-                }
-
-                // Формируем имя файла: например, "MC_L_Walk.png"
+                bool needsFlip = animKeySuffix == "_R_Walk";
+                string finalAnimSuffix = needsFlip ? "_L_Walk" : animKeySuffix;
                 string animFileName = $"{baseId}{finalAnimSuffix}.png";
                 string fullAnimPath = Path.Combine(_spritesPath, animFileName);
 
-                // 3. Загрузка спрайт-листа (Sheet)
-                ImageSource sheetSource = GetOrCreateSprite(fullAnimPath);
+                var sheetSource = GetOrCreateSprite(fullAnimPath) as BitmapSource;
 
-                // Fallback: если файла анимации нет, пробуем статичный спрайт (например, "MC.png")
-                if (sheetSource is DrawingImage || !File.Exists(fullAnimPath))
+                if (sheetSource == null)
                 {
                     string staticPath = Path.Combine(_spritesPath, $"{baseId}.png");
-                    sheetSource = GetOrCreateSprite(staticPath);
+                    sheetSource = GetOrCreateSprite(staticPath) as BitmapSource;
                 }
 
                 ImageSource currentSource = null;
 
-                if (sheetSource is BitmapSource bitmapSource)
+                if (sheetSource != null)
                 {
-                    // Автоматический расчет кадров
-                    int frameCount = bitmapSource.PixelWidth / character.FrameSize;
+                    int frameCount = sheetSource.PixelWidth / character.FrameSize;
 
-                    // Если это статичная картинка (1 кадр) или ширина совпадает с размером кадра
-                    if (frameCount <= 1 || bitmapSource.PixelWidth == character.FrameSize)
+                    if (frameCount <= 1 || sheetSource.PixelWidth == character.FrameSize)
                     {
-                        currentSource = bitmapSource;
+                        currentSource = sheetSource;
                     }
                     else
                     {
-                        // Анимация
-                        bool isMoving = character.Velocity.Length() > 0.001;
+                        bool isMoving = character.Velocity.Length() > Epsilon;
 
-                        if (!_animationTime.ContainsKey(visual)) _animationTime[visual] = 0;
+                        if (!_animationTime.ContainsKey(visual))
+                            _animationTime[visual] = 0;
 
                         if (isMoving)
-                            _animationTime[visual] += 1.0 / 60.0;
+                            _animationTime[visual] += DefaultFrameDuration;
                         else
                             _animationTime[visual] = 0;
 
-                        double durationPerFrame = 0.1;
                         int frameIndex = isMoving
-                            ? (int)(_animationTime[visual] / durationPerFrame) % frameCount
+                            ? (int)(_animationTime[visual] / AnimationFrameTime) % frameCount
                             : 0;
 
-                        // Защита от выхода за границы
-                        if (frameIndex >= frameCount) frameIndex = frameCount - 1;
+                        if (frameIndex >= frameCount)
+                            frameIndex = frameCount - 1;
 
-                        // Ключ кэша для конкретного кадра
-                        string cacheKey = $"{fullAnimPath}:{frameIndex}";
-
-                        if (!_staticFrameCache.TryGetValue(cacheKey, out CroppedBitmap cropped))
-                        {
-                            try
-                            {
-                                int xPos = frameIndex * character.FrameSize;
-                                // Создаем вырезанный кадр
-                                cropped = new CroppedBitmap(bitmapSource, new Int32Rect(xPos, 0, character.FrameSize, character.FrameSize));
-                                cropped.Freeze(); // Замораживаем для производительности
-                                _staticFrameCache[cacheKey] = cropped;
-                            }
-                            catch (Exception ex)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Ошибка обрезки спрайта: {ex.Message}");
-                            }
-                        }
-                        currentSource = cropped;
+                        currentSource = GetOrCreateFrame(fullAnimPath, frameIndex, character.FrameSize, sheetSource);
                     }
                 }
 
-                // Fallback, если вообще ничего не загрузилось
                 if (currentSource == null)
                 {
-                    currentSource = CreatePlaceholder(Colors.Red, character.Id);
+                    currentSource = CreatePlaceholder(PlaceholderError);
                 }
 
-                // --- ПРИМЕНЕНИЕ ИСТОЧНИКА И РАЗМЕРОВ ---
                 double displaySize = character.FrameSize;
                 visual.Source = currentSource;
                 visual.Width = displaySize;
                 visual.Height = displaySize;
                 visual.Stretch = Stretch.Uniform;
 
-                // Позиционирование
-                var pos = character.Position;
-                double left = pos.X - (displaySize / 2.0);
-                double top = pos.Y - (displaySize / 2.0);
+                double left = character.Position.X - (displaySize / 2.0);
+                double top = character.Position.Y - (displaySize / 2.0);
                 Canvas.SetLeft(visual, left);
                 Canvas.SetTop(visual, top);
 
-                // --- ОТЗЕРКАЛИВАНИЕ (ИСПРАВЛЕННОЕ) ---
-                visual.RenderTransformOrigin = new Point(0.5, 0.5);
-
-                if (needsFlip)
-                {
-                    // Если нужно отзеркалить (движение вправо), применяем ScaleTransform(-1, 1)
-                    visual.RenderTransform = new ScaleTransform(-1, 1);
-                }
-                else
-                {
-                    // Иначе сбрасываем трансформацию в единичную (не null!)
-                    visual.RenderTransform = new ScaleTransform(1, 1);
-                }
+                // Оптимизированное применение трансформаций
+                visual.RenderTransform = needsFlip ? _flipTransform : _normalTransform;
             }
         }
 
-
         public bool IsWalkable(int x, int y) => _grid.IsWalkable(x, y);
-
-        // --- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ---
 
         private BitmapImage LoadBitmap(string path)
         {
             if (!File.Exists(path)) return null;
+
             var bmp = new BitmapImage();
             bmp.BeginInit();
             bmp.UriSource = new Uri(path);
@@ -462,17 +462,34 @@ namespace GameProj
             DrawItems();
         }
 
-        private ImageSource CreatePlaceholder(Color color, string label = "")
+        private ImageSource CreatePlaceholder(Color color)
         {
             var drawing = new DrawingGroup();
             drawing.Children.Add(new GeometryDrawing
             {
                 Brush = new SolidColorBrush(color),
-                Geometry = new RectangleGeometry(new Rect(0, 0, 32, 32))
+                Geometry = new RectangleGeometry(new Rect(0, 0, TileSize, TileSize))
             });
             return new DrawingImage(drawing);
         }
+
+        // Вспомогательный класс для предметов на земле
+        private class GroundItem
+        {
+            public int X { get; }
+            public int Y { get; }
+            public Item Item { get; }
+
+            public GroundItem(int x, int y, Item item)
+            {
+                X = x;
+                Y = y;
+                Item = item;
+            }
+        }
     }
+    
+
 
 
 
@@ -480,149 +497,186 @@ namespace GameProj
 
     public class PhysicsEngine
     {
+        private const int TileSize = 32;
+        private const double Epsilon = 0.001;
+
         private readonly GameGrid _grid;
-        private const double Epsilon = 0.001; // Небольшой отступ, чтобы не застревать точно на границе
-        private const int TileSize = 32;      // Размер клетки в пикселях
 
         public PhysicsEngine(GameGrid grid)
         {
             _grid = grid ?? throw new ArgumentNullException(nameof(grid));
         }
 
-        /// <summary>
-        /// Основной метод обновления физики. Разделяет движение по осям для корректного скольжения вдоль стен.
-        /// </summary>
         public void UpdateCollisions(List<Character> characters)
         {
             foreach (var ch in characters)
             {
                 if (!ch.IsAlive) continue;
 
-                // 1. Движение и коллизия по оси X
-                HandleAxisCollision(ch, isXAxis: true);
+                CorrectStuckPosition(ch);
 
-                // 2. Движение и коллизия по оси Y
-                HandleAxisCollision(ch, isXAxis: false);
+                Vector2D oldPosition = ch.Position;
+                Vector2D newPosition = new Vector2D(
+                    ch.Position.X + ch.Velocity.X,
+                    ch.Position.Y + ch.Velocity.Y
+                );
 
-                // Если скорость очень мала, обнуляем её полностью, чтобы избежать микро-дрожания
+                if (TryResolveCollision(ch, oldPosition, newPosition, out Vector2D resolvedPosition))
+                {
+                    ch.Position = resolvedPosition;
+
+                    if (Math.Abs(ch.Position.X - oldPosition.X) < Epsilon)
+                        ch.Velocity.X = 0;
+                    if (Math.Abs(ch.Position.Y - oldPosition.Y) < Epsilon)
+                        ch.Velocity.Y = 0;
+                }
+                else
+                {
+                    ch.Position = newPosition;
+                }
+
+                // Обнуляем очень маленькие скорости
                 if (Math.Abs(ch.Velocity.X) < Epsilon) ch.Velocity.X = 0;
                 if (Math.Abs(ch.Velocity.Y) < Epsilon) ch.Velocity.Y = 0;
             }
         }
 
-        private void HandleAxisCollision(Character ch, bool isXAxis)
+        private bool TryResolveCollision(Character ch, Vector2D oldPos, Vector2D newPos, out Vector2D resolvedPos)
         {
-            // Получаем текущую скорость по нужной оси
-            double velocity = isXAxis ? ch.Velocity.X : ch.Velocity.Y;
+            Vector2D direction = new Vector2D(newPos.X - oldPos.X, newPos.Y - oldPos.Y);
+            double distance = direction.Length();
 
-            // Если движения нет, пропускаем расчеты
-            if (Math.Abs(velocity) < Epsilon) return;
-
-            // Предсказываем новую позицию
-            double newPosVal = (isXAxis ? ch.Position.X : ch.Position.Y) + velocity;
-
-            // Размеры хитбокса персонажа (предполагаем квадратный хитбокс для простоты, как в вашем коде Size)
-            double size = ch.Size;
-            double halfSize = size / 2.0;
-
-            // Определяем границы персонажа (AABB) после движения по одной оси
-            // Важно: по одной оси позиция меняется, по другой остается старой
-            double left, right, top, bottom;
-
-            if (isXAxis)
+            if (distance < Epsilon)
             {
-                left = newPosVal - halfSize;
-                right = newPosVal + halfSize;
-                top = ch.Position.Y - halfSize;
-                bottom = ch.Position.Y + halfSize;
-            }
-            else
-            {
-                left = ch.Position.X - halfSize;
-                right = ch.Position.X + halfSize;
-                top = newPosVal - halfSize;
-                bottom = newPosVal + halfSize;
+                resolvedPos = newPos;
+                return false;
             }
 
-            // Находим диапазон клеток сетки, которые пересекает этот прямоугольник
+            direction = new Vector2D(direction.X / distance, direction.Y / distance);
+            double stepSize = Math.Min(TileSize / 4.0, distance / 10.0);
+
+            Vector2D lastValidPos = oldPos;
+
+            for (double t = stepSize; t <= distance; t += stepSize)
+            {
+                Vector2D checkPoint = new Vector2D(
+                    oldPos.X + direction.X * t,
+                    oldPos.Y + direction.Y * t
+                );
+
+                if (CheckPositionCollision(ch, checkPoint, out Vector2D collisionPoint))
+                {
+                    resolvedPos = lastValidPos;
+                    return true;
+                }
+
+                lastValidPos = checkPoint;
+            }
+
+            resolvedPos = newPos;
+            return false;
+        }
+
+        private bool CheckPositionCollision(Character ch, Vector2D position, out Vector2D collisionPoint)
+        {
+            double halfSize = ch.Size / 2.0;
+            double left = position.X - halfSize;
+            double right = position.X + halfSize;
+            double top = position.Y - halfSize;
+            double bottom = position.Y + halfSize;
+
             int minCol = (int)Math.Floor(left / TileSize);
-            int maxCol = (int)Math.Floor((right - Epsilon) / TileSize); // -Epsilon чтобы не захватить соседнюю клетку при точном совпадении
+            int maxCol = (int)Math.Floor((right - Epsilon) / TileSize);
             int minRow = (int)Math.Floor(top / TileSize);
             int maxRow = (int)Math.Floor((bottom - Epsilon) / TileSize);
 
-            bool collisionOccurred = false;
-            double resolvedPos = newPosVal;
-
-            // Перебираем все потенциально затронутые клетки
             for (int c = minCol; c <= maxCol; c++)
             {
                 for (int r = minRow; r <= maxRow; r++)
                 {
-                    // Пропускаем клетки вне карты или проходимые клетки
-                    if (!_grid.InBounds(c, r) || _grid[c, r].IsWalkable())
-                        continue;
+                    if (!_grid.InBounds(c, r)) continue;
+                    if (_grid[c, r].IsWalkable()) continue;
 
-                    // Получаем AABB стены (клетки) в мировых координатах
                     Rect wallRect = new Rect(c * TileSize, r * TileSize, TileSize, TileSize);
+                    Rect charRect = new Rect(left, top, ch.Size, ch.Size);
 
-                    // Получаем AABB персонажа (используем рассчитанные выше координаты)
-                    Rect charRect = new Rect(left, top, right - left, bottom - top);
-
-                    // Проверяем пересечение (IntersectsWith)
                     if (wallRect.IntersectsWith(charRect))
                     {
-                        collisionOccurred = true;
-
-                        // РАЗРЕШЕНИЕ КОЛЛИЗИИ (Resolution)
-                        if (isXAxis)
-                        {
-                            if (velocity > 0) // Движемся вправо -> упираемся в левую грань стены
-                            {
-                                resolvedPos = wallRect.Left - halfSize - Epsilon;
-                            }
-                            else // Движемся влево -> упираемся в правую грань стены
-                            {
-                                resolvedPos = wallRect.Right + halfSize + Epsilon;
-                            }
-                        }
-                        else // Ось Y
-                        {
-                            if (velocity > 0) // Движемся вниз -> упираемся в верхнюю грань стены
-                            {
-                                resolvedPos = wallRect.Top - halfSize - Epsilon;
-                            }
-                            else // Движемся вверх -> упираемся в нижнюю грань стены
-                            {
-                                resolvedPos = wallRect.Bottom + halfSize + Epsilon;
-                            }
-                        }
-
+                        collisionPoint = CalculateCollisionPoint(wallRect, charRect, position, halfSize);
+                        return true;
                     }
                 }
             }
 
-            // Применяем результаты
-            if (collisionOccurred)
-            {
-                if (isXAxis)
-                {
-                    ch.Position.X = resolvedPos;
-                    ch.Velocity.X = 0; // Останавливаем движение по X
-                }
-                else
-                {
-                    ch.Position.Y = resolvedPos;
-                    ch.Velocity.Y = 0; // Останавливаем движение по Y
-                }
-            }
+            collisionPoint = position;
+            return false;
+        }
+
+        private Vector2D CalculateCollisionPoint(Rect wallRect, Rect charRect, Vector2D position, double halfSize)
+        {
+            double overlapLeft = charRect.Right - wallRect.Left;
+            double overlapRight = wallRect.Right - charRect.Left;
+            double overlapTop = charRect.Bottom - wallRect.Top;
+            double overlapBottom = wallRect.Bottom - charRect.Top;
+
+            double minOverlap = Math.Min(Math.Min(overlapLeft, overlapRight), Math.Min(overlapTop, overlapBottom));
+
+            if (Math.Abs(minOverlap - overlapLeft) < Epsilon)
+                return new Vector2D(wallRect.Left - halfSize - Epsilon, position.Y);
+            else if (Math.Abs(minOverlap - overlapRight) < Epsilon)
+                return new Vector2D(wallRect.Right + halfSize + Epsilon, position.Y);
+            else if (Math.Abs(minOverlap - overlapTop) < Epsilon)
+                return new Vector2D(position.X, wallRect.Top - halfSize - Epsilon);
             else
+                return new Vector2D(position.X, wallRect.Bottom + halfSize + Epsilon);
+        }
+
+        private void CorrectStuckPosition(Character ch)
+        {
+            double halfSize = ch.Size / 2.0;
+            double left = ch.Position.X - halfSize;
+            double right = ch.Position.X + halfSize;
+            double top = ch.Position.Y - halfSize;
+            double bottom = ch.Position.Y + halfSize;
+
+            int minCol = (int)Math.Floor(left / TileSize);
+            int maxCol = (int)Math.Floor((right - Epsilon) / TileSize);
+            int minRow = (int)Math.Floor(top / TileSize);
+            int maxRow = (int)Math.Floor((bottom - Epsilon) / TileSize);
+
+            for (int c = minCol; c <= maxCol; c++)
             {
-                // Если коллизий нет, применяем новую позицию
-                if (isXAxis)
-                    ch.Position.X = newPosVal;
-                else
-                    ch.Position.Y = newPosVal;
+                for (int r = minRow; r <= maxRow; r++)
+                {
+                    if (!_grid.InBounds(c, r)) continue;
+                    if (_grid[c, r].IsWalkable()) continue;
+
+                    Rect wallRect = new Rect(c * TileSize, r * TileSize, TileSize, TileSize);
+                    Rect charRect = new Rect(left, top, ch.Size, ch.Size);
+
+                    if (wallRect.IntersectsWith(charRect))
+                    {
+                        double overlapLeft = charRect.Right - wallRect.Left;
+                        double overlapRight = wallRect.Right - charRect.Left;
+                        double overlapTop = charRect.Bottom - wallRect.Top;
+                        double overlapBottom = wallRect.Bottom - charRect.Top;
+
+                        double minOverlap = Math.Min(Math.Min(overlapLeft, overlapRight), Math.Min(overlapTop, overlapBottom));
+
+                        if (Math.Abs(minOverlap - overlapLeft) < Epsilon)
+                            ch.Position.X -= overlapLeft + Epsilon;
+                        else if (Math.Abs(minOverlap - overlapRight) < Epsilon)
+                            ch.Position.X += overlapRight + Epsilon;
+                        else if (Math.Abs(minOverlap - overlapTop) < Epsilon)
+                            ch.Position.Y -= overlapTop + Epsilon;
+                        else
+                            ch.Position.Y += overlapBottom + Epsilon;
+
+                        return;
+                    }
+                }
             }
         }
     }
 }
+
