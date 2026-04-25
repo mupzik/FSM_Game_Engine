@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using static GameProj.GameManager;
+using static System.Windows.Forms.AxHost;
 
 namespace GameProj.src
 {
@@ -114,5 +116,116 @@ namespace GameProj.src
         public virtual void Exit() => onExit?.Invoke();
         public virtual void HandleEvent(FSM<TState, TEvent> machine, TEvent _event) => eventHandler?.Invoke(machine, _event);
         public virtual void Update(FSM<TState, TEvent> machine) => updateHandler?.Invoke(machine);
+    }
+
+
+
+    /// <summary>
+    /// Составное состояние для иерархического конечного автомата.
+    /// </summary>
+    public class CompositeState<TState, TEvent> : State<TState, TEvent>
+    {
+        private readonly List<State<TState, TEvent>> subStates = new List<State<TState, TEvent>>();
+        private State<TState, TEvent> currentSubState;
+        private TState historyState; // сохраняем ID последнего активного подсостояния
+        private readonly TState initialState; // начальное подсостояние при первом входе
+
+        // Конструктор: принимает ID состояния и ID начального подсостояния
+        public CompositeState(TState id, TState initialState) : base(id)
+        {
+            this.initialState = initialState;
+        }
+
+        public void AddSubState(State<TState, TEvent> state)
+        {
+            subStates.Add(state);
+        }
+
+        public void SetHistoryState(TState state)
+        {
+            historyState = state;
+        }
+
+        /// <summary>
+        /// Возвращает тип текущего активного подсостояния.
+        /// Если подсостояния нет, возвращает default(TState).
+        /// </summary>
+        public TState GetCurrentSubStateId()
+        {
+            if (currentSubState == null)
+            {
+                return default(TState);
+            }
+            return currentSubState.Id;
+        }
+
+        public State<TState, TEvent> GetCurrentSubState() => currentSubState;
+
+        public void SwitchToSubState(TState targetId)
+        {
+            var targetState = subStates.FirstOrDefault(s => s.Id.Equals(targetId));
+            if (targetState == null)
+                throw new ArgumentException($"SubState with ID {targetId} not found");
+
+            currentSubState?.Exit();
+            currentSubState = targetState;
+            currentSubState?.Enter();
+        }
+
+        public override void Enter()
+        {
+            base.Enter();
+
+            // Определяем, в какое подсостояние переходить
+            TState targetId;
+            if (historyState != null && !historyState.Equals(initialState))
+            {
+                // Если есть история — восстанавливаем последнее активное подсостояние
+                targetId = historyState;
+            }
+            else
+            {
+                // Иначе — начальное состояние
+                targetId = initialState;
+            }
+
+            // Находим подсостояние по ID
+            currentSubState = subStates.FirstOrDefault(s => s.Id.Equals(targetId));
+
+            if (currentSubState == null && subStates.Count > 0)
+            {
+                // Если подсостояние не найдено, берём первое
+                currentSubState = subStates.First();
+            }
+
+            currentSubState?.Enter();
+        }
+
+        public override void Exit()
+        {
+            // Сохраняем текущее подсостояние в историю
+            if (currentSubState != null)
+            {
+                historyState = currentSubState.Id;
+            }
+
+            currentSubState?.Exit();
+            base.Exit();
+        }
+
+        public override void HandleEvent(FSM<TState, TEvent> machine, TEvent _event)
+        {
+            // Сначала пробуем обработать событие в текущем подсостоянии
+            if (currentSubState != null)
+            {
+                currentSubState.HandleEvent(machine, _event);
+            }
+        }
+
+        public override void Update(FSM<TState, TEvent> machine)
+        {
+            // Обновляем текущее подсостояние
+            currentSubState?.Update(machine);
+        }
     }
 }

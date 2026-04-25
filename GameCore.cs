@@ -3,75 +3,95 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Numerics;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Path = System.IO.Path;
 
 namespace GameProj
 {
+    // Крупный декоративный объект (занимает несколько клеток)
+    public class LargeDecor
+    {
+        public int X { get; set; }          // Позиция по X в клетках
+        public int Y { get; set; }          // Позиция по Y в клетках
+        public string SpriteId { get; set; } // ID спрайта
+        public int Width { get; set; }       // Ширина в клетках
+        public int Height { get; set; }      // Высота в клетках
+        public TileType Type { get; set; }   // Тип тайла (стена/пол)
+    }
+
+    // Главный управляющий класс игры
     public class GameManager
     {
+        // События окончания игры и победы
         public event Action OnGameOver;
         public event Action OnWin;
 
-        public enum Event { Trigger, Heal, Sword, DragonAlive, DragonDead }
-        public enum State_ { Tutorial, Start, End }
+        // Список крупных декоративных объектов
+        private readonly List<LargeDecor> _largeDecors = new List<LargeDecor>();
 
-        // Константы
-        private const int TileSize = 32;
-        private const double Epsilon = 0.001;
-        private const double PickupDistance = 40.0;
-        private const double AnimationFrameTime = 0.1;
-        private const int ItemIconSize = 24;
-        private const double DefaultFrameDuration = 1.0 / 60.0;
+        // Общие события для конечного автомата
+        public enum CommonEvent { Exit, Restart }
 
-        private static readonly Color PlaceholderBackground = Colors.Gray;
-        private static readonly Color PlaceholderError = Colors.Red;
+        // Константы размеров и физики
+        private const int TileSize = 32;           // Размер клетки в пикселях
+        private const double Epsilon = 0.001;       // Маленькое число для сравнения
+        private const double AnimationFrameTime = 0.1; // Время кадра анимации
+        private const int ItemIconSize = 24;        // Размер иконки предмета
+        private const double DefaultFrameDuration = 1.0 / 60.0; // 60 FPS
 
-        private readonly GameGrid _grid;
-        private readonly GameCanvas _canvas;
-        private readonly PhysicsEngine _physics;
+        private static readonly Color PlaceholderBackground = Colors.Gray; // Цвет заглушки
 
-        // Оптимизированные кэши
-        private static readonly Dictionary<string, ImageSource> _spriteCache = new Dictionary<string, ImageSource>();
-        private static readonly Dictionary<string, CroppedBitmap> _frameCache = new Dictionary<string, CroppedBitmap>();
-        private static readonly ScaleTransform _flipTransform = new ScaleTransform(-1, 1);
-        private static readonly ScaleTransform _normalTransform = new ScaleTransform(1, 1);
+        // Основные компоненты
+        private readonly GameGrid _grid;           // Сетка мира
+        private readonly GameCanvas _canvas;       // Холст для отрисовки
+        private readonly PhysicsEngine _physics;    // Движок физики
 
+        // Персонажи и их визуальные представления
         private readonly List<Character> _characters = new List<Character>();
         private readonly Dictionary<Character, UIElement> _characterVisuals = new Dictionary<Character, UIElement>();
+
+        // Визуальные представления предметов на земле
         private readonly Dictionary<(int x, int y), Image> _itemVisuals = new Dictionary<(int x, int y), Image>();
 
-        // Оптимизированный список предметов на земле
+        // Предметы на земле
         private readonly List<GroundItem> _groundItems = new List<GroundItem>();
 
-        private Ally _ally;
-        private Player _player;
+        // Список врагов
+        private readonly List<Enemy> _enemies = new List<Enemy>();
 
+        // Генератор случайных чисел
         internal readonly Random _rng = new Random();
 
-        // FSM
-        private FSM<State_, Event> _gameFSM;
-        private bool _wPressed, _aPressed, _sPressed, _dPressed;
+        // Конечный автомат 
+        private FSM<object, object> _gameFSM;
 
+        // Состояния игры
+        private CompositeState<object, object> _tutorialState; // Обучение
+        private CompositeState<object, object> _gameState;     // Основная игра
+        private CompositeState<object, object> _endState;      // Конец игры
+
+        // Время анимации для персонажей
         private readonly Dictionary<UIElement, double> _animationTime = new Dictionary<UIElement, double>();
 
+        // Пути к ресурсам
         private readonly string _tilesPath, _spritesPath, _itemsPath;
 
+        // Публичные свойства
         public IReadOnlyList<Character> Characters => _characters;
-        public State_ CurrentGameState => _gameFSM?.CurrentState?.Id ?? State_.Tutorial;
         public GameGrid Grid => _grid;
+        public FSM<object, object> FSM => _gameFSM;
 
+        // Конструктор
         public GameManager(GameCanvas canvas, int width, int height, Action<GameManager> mapInitializer = null)
         {
             _canvas = canvas ?? throw new ArgumentNullException(nameof(canvas));
             _grid = new GameGrid(width, height, TileSize);
 
+            // Определяем пути к папкам с ресурсами
             string baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             if (string.IsNullOrEmpty(baseDir)) baseDir = AppDomain.CurrentDomain.BaseDirectory;
             _tilesPath = Path.Combine(baseDir, "Tiles");
@@ -80,139 +100,208 @@ namespace GameProj
 
             _physics = new PhysicsEngine(_grid);
 
-            InitializeBaseFSM();
-
+            // Инициализация карты, если передана
             mapInitializer?.Invoke(this);
 
+            // Рисуем статическую карту, декор и предметы
             DrawStaticMap();
+            DrawLargeDecors();
             DrawItems();
         }
 
-        private void InitializeBaseFSM()
+        /// <summary>
+        /// Инициализирует конечный автомат с тремя состояниями
+        /// </summary>
+        public void InitializeFSM(
+            object tutorialId,
+            object gameId,
+            object endId,
+            Action<CompositeState<object, object>> tutorialInitializer = null,
+            Action<CompositeState<object, object>> gameInitializer = null,
+            Action<CompositeState<object, object>> endInitializer = null)
         {
-            var tutorial = new State<State_, Event>(State_.Tutorial);
-            var start = new State<State_, Event>(State_.Start);
-            var end = new State<State_, Event>(State_.End);
+            // Создаем состояния
+            _tutorialState = new CompositeState<object, object>(tutorialId, tutorialId);
+            _gameState = new CompositeState<object, object>(gameId, gameId);
+            _endState = new CompositeState<object, object>(endId, endId);
 
-            tutorial.SetUpdate(m =>
+            // Инициализируем состояния, если переданы инициализаторы
+            tutorialInitializer?.Invoke(_tutorialState);
+            gameInitializer?.Invoke(_gameState);
+            endInitializer?.Invoke(_endState);
+
+            // Настраиваем обработчики событий для каждого состояния
+            _tutorialState.SetEventHandler((machine, ev) =>
             {
-                if (_wPressed || _aPressed || _sPressed || _dPressed)
-                    m.SetState(start);
+                if (ev is CommonEvent commonEv)
+                {
+                    if (commonEv == CommonEvent.Exit)
+                        Application.Current?.Shutdown();
+                }
             });
 
-            _gameFSM = new FSM<State_, Event>(tutorial);
+            _gameState.SetEventHandler((machine, ev) =>
+            {
+                if (ev is CommonEvent commonEv)
+                {
+                    if (commonEv == CommonEvent.Exit)
+                        Application.Current?.Shutdown();
+                }
+            });
+
+            _endState.SetEventHandler((machine, ev) =>
+            {
+                if (ev is CommonEvent commonEv)
+                {
+                    if (commonEv == CommonEvent.Restart)
+                        machine.SetState(_tutorialState); // Рестарт - в обучение
+                    else if (commonEv == CommonEvent.Exit)
+                        Application.Current?.Shutdown();
+                }
+            });
+
+            // Запускаем FSM с состояния обучения
+            _gameFSM = new FSM<object, object>(_tutorialState);
         }
 
-        public void ShakeCamera() { _canvas.TriggerShake(); }
-
-        public bool HasItemsOnGround() => _groundItems.Count > 0;
-
-        public void SetAlly(Ally ally) => _ally = ally;
-        public void SetPlayer(Player player) => _player = player;
-
-        public void OnTutorialKeyPress(Key key)
+        /// <summary>
+        /// Получает композитное состояние по его ID
+        /// </summary>
+        public CompositeState<object, object> GetCompositeState(object stateId)
         {
-            if (_gameFSM.CurrentState.Id != State_.Tutorial) return;
-            switch (key)
+            if (_tutorialState != null && _tutorialState.Id.Equals(stateId))
+                return _tutorialState;
+            if (_gameState != null && _gameState.Id.Equals(stateId))
+                return _gameState;
+            if (_endState != null && _endState.Id.Equals(stateId))
+                return _endState;
+            return null;
+        }
+
+        /// <summary>
+        /// Переключает FSM на указанное состояние
+        /// </summary>
+        public void SwitchToState(object stateId)
+        {
+            var targetState = GetCompositeState(stateId);
+            if (targetState != null)
             {
-                case Key.W: _wPressed = true; break;
-                case Key.A: _aPressed = true; break;
-                case Key.S: _sPressed = true; break;
-                case Key.D: _dPressed = true; break;
+                _gameFSM.SetState(targetState);
             }
         }
 
-        public void OnItemPickedUp(string itemId, bool byAlly = false) { }
-
-        // --- ОПТИМИЗИРОВАННЫЕ МЕТОДЫ ЗАГРУЗКИ ---
-        private ImageSource GetOrCreateSprite(string filePath)
+        /// <summary>
+        /// Отправляет событие в конечный автомат
+        /// </summary>
+        public void SendEvent(object ev)
         {
-            if (string.IsNullOrEmpty(filePath)) return null;
-
-            if (_spriteCache.TryGetValue(filePath, out ImageSource cached))
-                return cached;
-
-            ImageSource result = File.Exists(filePath) ? LoadBitmap(filePath) : CreatePlaceholder(PlaceholderBackground);
-            _spriteCache[filePath] = result;
-            return result;
+            _gameFSM?.HandleEvent(ev);
         }
 
-        private CroppedBitmap GetOrCreateFrame(string spritePath, int frameIndex, int frameSize, BitmapSource sheetSource = null)
+        // Вспомогательные методы
+        public void ShakeCamera() { _canvas.TriggerShake(); } // Тряска камеры
+        public bool HasItemsOnGround() => _groundItems.Count > 0; // Есть ли предметы на земле
+        public void OnItemPickedUp(string itemId, bool byAlly = false) { } // Обработка поднятия предмета
+
+        /// <summary>
+        /// Загружает изображение из файла без кэширования
+        /// </summary>
+        private BitmapImage LoadBitmap(string path)
         {
-            string cacheKey = $"{spritePath}:{frameIndex}";
-
-            if (_frameCache.TryGetValue(cacheKey, out CroppedBitmap cached))
-                return cached;
-
-            if (sheetSource == null)
-            {
-                var source = GetOrCreateSprite(spritePath) as BitmapSource;
-                if (source == null) return null;
-                sheetSource = source;
-            }
+            if (!File.Exists(path)) return null;
 
             try
             {
-                int xPos = frameIndex * frameSize;
-                var cropped = new CroppedBitmap(sheetSource, new Int32Rect(xPos, 0, frameSize, frameSize));
-                cropped.Freeze();
-                _frameCache[cacheKey] = cropped;
-                return cropped;
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri(path);
+                bmp.CacheOption = BitmapCacheOption.OnLoad; // Важно: загружаем в память сразу, чтобы разблокировать файл
+                bmp.EndInit();
+                bmp.Freeze(); // Делаем доступным для всех потоков
+                return bmp;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Ошибка обрезки спрайта: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Ошибка загрузки изображения {path}: {ex.Message}");
                 return null;
             }
         }
 
-        // --- ОТРИСОВКА ---
+        /// <summary>
+        /// Создает изображение-заглушку указанного цвета
+        /// </summary>
+        private ImageSource CreatePlaceholder(Color color)
+        {
+            var drawing = new DrawingGroup();
+            drawing.Children.Add(new GeometryDrawing
+            {
+                Brush = new SolidColorBrush(color),
+                Geometry = new RectangleGeometry(new Rect(0, 0, TileSize, TileSize))
+            });
+            return new DrawingImage(drawing);
+        }
+
+        /// <summary>
+        /// Рисует статическую карту (фон и малый декор)
+        /// </summary>
         private void DrawStaticMap()
         {
-            _canvas.GameArea.Children.Clear();
+            // Удаляем старые изображения фона и декора
+            var toRemove = _canvas.GameArea.Children
+                .OfType<Image>()
+                .Where(img => Canvas.GetZIndex(img) == 0 || Canvas.GetZIndex(img) == 1)
+                .ToList();
 
+            foreach (var img in toRemove)
+            {
+                _canvas.GameArea.Children.Remove(img);
+            }
+
+            // Проходим по всем клеткам
             for (int x = 0; x < _grid.Width; x++)
             {
                 for (int y = 0; y < _grid.Height; y++)
                 {
                     var cell = _grid[x, y];
 
-                    // Фон
+                    // Рисуем фон
                     if (!string.IsNullOrEmpty(cell.BackgroundSpriteId))
                     {
                         string bgPath = Path.Combine(_tilesPath, cell.BackgroundSpriteId + ".png");
-                        var bgSource = GetOrCreateSprite(bgPath);
+                        var bgSource = LoadBitmap(bgPath);
                         if (bgSource != null)
                         {
                             var bgImage = new Image
                             {
-                                Width = TileSize,
-                                Height = TileSize,
-                                Source = bgSource
+                                Width = TileSize + 1,
+                                Height = TileSize + 1,
+                                Source = bgSource,
+                                Stretch = Stretch.UniformToFill
                             };
-                            Canvas.SetLeft(bgImage, x * TileSize);
-                            Canvas.SetTop(bgImage, y * TileSize);
-                            Canvas.SetZIndex(bgImage, 0);
+                            Canvas.SetLeft(bgImage, x * TileSize - 0.5);
+                            Canvas.SetTop(bgImage, y * TileSize - 0.5);
+                            Canvas.SetZIndex(bgImage, 0); // Нижний слой
                             _canvas.GameArea.Children.Add(bgImage);
                         }
                     }
 
-                    // Декор
+                    // Рисуем малый декор
                     if (!string.IsNullOrEmpty(cell.DecorSpriteId))
                     {
                         string decorPath = Path.Combine(_tilesPath, cell.DecorSpriteId + ".png");
-                        var decorSource = GetOrCreateSprite(decorPath);
+                        var decorSource = LoadBitmap(decorPath);
                         if (decorSource != null)
                         {
                             var decorImage = new Image
                             {
-                                Width = TileSize,
-                                Height = TileSize,
-                                Source = decorSource
+                                Width = TileSize + 1,
+                                Height = TileSize + 1,
+                                Source = decorSource,
+                                Stretch = Stretch.UniformToFill
                             };
-                            Canvas.SetLeft(decorImage, x * TileSize);
-                            Canvas.SetTop(decorImage, y * TileSize);
-                            Canvas.SetZIndex(decorImage, 1);
+                            Canvas.SetLeft(decorImage, x * TileSize - 0.5);
+                            Canvas.SetTop(decorImage, y * TileSize - 0.5);
+                            Canvas.SetZIndex(decorImage, 1); // Средний слой
                             _canvas.GameArea.Children.Add(decorImage);
                         }
                     }
@@ -220,15 +309,62 @@ namespace GameProj
             }
         }
 
+        /// <summary>
+        /// Рисует крупные декоративные объекты
+        /// </summary>
+        private void DrawLargeDecors()
+        {
+            // Удаляем старые изображения крупного декора
+            var oldLargeDecors = _canvas.GameArea.Children
+                .OfType<Image>()
+                .Where(img => Canvas.GetZIndex(img) == 5)
+                .ToList();
+
+            foreach (var img in oldLargeDecors)
+            {
+                _canvas.GameArea.Children.Remove(img);
+            }
+
+            // Рисуем каждый декоративный объект
+            foreach (var decor in _largeDecors)
+            {
+                string decorPath = Path.Combine(_tilesPath, decor.SpriteId + ".png");
+                var decorSource = LoadBitmap(decorPath);
+
+                if (decorSource != null)
+                {
+                    var image = new Image
+                    {
+                        Width = decor.Width * TileSize,
+                        Height = decor.Height * TileSize,
+                        Source = decorSource,
+                        Stretch = Stretch.Fill
+                    };
+
+                    Canvas.SetLeft(image, decor.X * TileSize);
+                    Canvas.SetTop(image, decor.Y * TileSize);
+                    Canvas.SetZIndex(image, 5); // Высокий слой
+                    _canvas.GameArea.Children.Add(image);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Рисует предметы на земле
+        /// </summary>
         private void DrawItems()
         {
+            // Удаляем старые изображения предметов
             foreach (var img in _itemVisuals.Values)
+            {
                 _canvas.GameArea.Children.Remove(img);
+            }
             _itemVisuals.Clear();
 
+            // Рисуем каждый предмет
             foreach (var groundItem in _groundItems)
             {
-                var itemSource = GetOrCreateSprite(groundItem.Item.IconPath);
+                var itemSource = LoadBitmap(groundItem.Item.IconPath);
                 if (itemSource != null)
                 {
                     var image = new Image
@@ -239,6 +375,7 @@ namespace GameProj
                         Stretch = Stretch.Uniform
                     };
 
+                    // Центрируем иконку в клетке
                     double offset = (TileSize - ItemIconSize) / 2.0;
                     Canvas.SetLeft(image, groundItem.X * TileSize + offset);
                     Canvas.SetTop(image, groundItem.Y * TileSize + offset);
@@ -249,30 +386,42 @@ namespace GameProj
             }
         }
 
+        /// <summary>
+        /// Устанавливает тип и спрайт клетки
+        /// </summary>
         public void SetTile(int x, int y, TileType type, string spriteId, string decorSpriteId = null)
         {
             if (!_grid.InBounds(x, y)) return;
             _grid.UpdateCell(x, y, type, backgroundSpriteId: spriteId, decorSpriteId: decorSpriteId);
         }
 
+        /// <summary>
+        /// Размещает предмет на земле
+        /// </summary>
         public void PlaceItem(int x, int y, Item item)
         {
             if (!_grid.InBounds(x, y)) return;
             _grid.PlaceItem(x, y, item);
             _groundItems.Add(new GroundItem(x, y, item));
-            DrawItems();
+            DrawItems(); // Обновляем отображение
         }
 
+        /// <summary>
+        /// Добавляет персонажа в игру
+        /// </summary>
         public void AddCharacter(Character character)
         {
             if (character == null) return;
             _characters.Add(character);
             var visual = CreateCharacterVisual(character);
             _characterVisuals[character] = visual;
-            Canvas.SetZIndex(visual, 10);
+            Canvas.SetZIndex(visual, 10); // Самый высокий слой
             _canvas.GameArea.Children.Add(visual);
         }
 
+        /// <summary>
+        /// Создает визуальное представление для персонажа
+        /// </summary>
         private UIElement CreateCharacterVisual(Character ch)
         {
             var image = new Image
@@ -281,86 +430,82 @@ namespace GameProj
                 RenderTransformOrigin = new Point(0.5, 0.5)
             };
 
-            string baseName = "MC";
-            if (ch is Ally) baseName = "Orc";
-            if (!string.IsNullOrEmpty(ch.SpritePath))
-                baseName = Path.GetFileNameWithoutExtension(ch.SpritePath);
+            string baseName;
 
-            image.Tag = baseName;
+            // Определяем базовое имя для спрайтов
+            if (!string.IsNullOrEmpty(ch.SpritePath))
+            {
+                baseName = Path.GetFileNameWithoutExtension(ch.SpritePath);
+            }
+            else if (!string.IsNullOrEmpty(ch.Id))
+            {
+                baseName = ch.Id;
+            }
+            else
+            {
+                baseName = "Unknown";
+            }
+
+            image.Tag = baseName; // Сохраняем для использования в рендере
             return image;
         }
 
+        /// <summary>
+        /// Обновляет состояние игры (вызывается каждый кадр)
+        /// </summary>
         public void Update()
         {
-            _gameFSM?.Update();
+            _gameFSM?.Update(); // Обновляем FSM
 
+            // Обновляем всех живых персонажей
             foreach (var ch in _characters.ToArray())
             {
                 if (ch.IsAlive)
                     ch.Update();
             }
 
+            // Обрабатываем столкновения
             _physics.UpdateCollisions(_characters);
 
-            // Оптимизированный подбор предметов
-            UpdatePickups();
-
-            // Рендеринг персонажей
+            // Перерисовываем персонажей
             RenderCharacters();
         }
 
-        private void UpdatePickups()
+        /// <summary>
+        /// Удаляет предмет с указанной клетки
+        /// </summary>
+        public void RemoveItemFromGround(int x, int y)
         {
-            var itemsToRemove = new List<GroundItem>();
+            if (!_grid.InBounds(x, y)) return;
 
-            foreach (var ch in _characters)
+            _grid[x, y].ItemOnGround = null;
+
+            // Удаляем из списка предметов на земле
+            var groundItem = _groundItems.FirstOrDefault(gi => gi.X == x && gi.Y == y);
+            if (groundItem != null)
             {
-                if (!ch.IsAlive) continue;
-
-                foreach (var groundItem in _groundItems)
-                {
-                    Vector2D itemPos = new Vector2D(
-                        groundItem.X * TileSize + TileSize / 2.0,
-                        groundItem.Y * TileSize + TileSize / 2.0
-                    );
-
-                    if (Vector2D.Distance(ch.Position, itemPos) <= PickupDistance)
-                    {
-                        if (ch.Inventory.AddItem(groundItem.Item) >= 0)
-                        {
-                            ch.PickupItem(groundItem.Item.Key);
-                            itemsToRemove.Add(groundItem);
-
-                            if (_itemVisuals.TryGetValue((groundItem.X, groundItem.Y), out Image img))
-                            {
-                                _canvas.GameArea.Children.Remove(img);
-                                _itemVisuals.Remove((groundItem.X, groundItem.Y));
-                            }
-
-                            if (ch is Player)
-                                OnItemPickedUp(groundItem.Item.Key, false);
-
-                            break; // Предмет подобран, выходим из цикла
-                        }
-                    }
-                }
+                _groundItems.Remove(groundItem);
             }
 
-            foreach (var item in itemsToRemove)
+            // Удаляем визуальное представление
+            if (_itemVisuals.TryGetValue((x, y), out Image img))
             {
-                _groundItems.Remove(item);
-                _grid[item.X, item.Y].ItemOnGround = null;
+                _canvas.GameArea.Children.Remove(img);
+                _itemVisuals.Remove((x, y));
             }
         }
 
+        /// <summary>
+        /// Отрисовывает всех персонажей с анимацией и учетом визуального масштаба
+        /// </summary>
         private void RenderCharacters()
         {
             foreach (var kvp in _characterVisuals)
             {
                 var character = kvp.Key;
-                var visual = kvp.Value as Image;
-                if (visual == null) continue;
+                if (!(kvp.Value is Image visual)) continue;
 
+                // Скрываем мертвых персонажей
                 if (!character.IsAlive)
                 {
                     visual.Visibility = Visibility.Collapsed;
@@ -373,107 +518,276 @@ namespace GameProj
                 string animKeySuffix = character.GetAnimationKey(character.Velocity);
 
                 if (string.IsNullOrEmpty(animKeySuffix))
-                    animKeySuffix = "_D_Walk";
+                    animKeySuffix = "_D_Walk"; // Анимация по умолчанию
 
-                bool needsFlip = animKeySuffix == "_R_Walk";
-                string finalAnimSuffix = needsFlip ? "_L_Walk" : animKeySuffix;
+                // Обработка отражения для движения влево
+                bool needsFlip = false;
+                string finalAnimSuffix = animKeySuffix;
+
+                if (animKeySuffix == "_L_Walk")
+                {
+                    finalAnimSuffix = "_R_Walk"; // Используем правую анимацию
+                    needsFlip = true;            // И отражаем её
+                }
+
                 string animFileName = $"{baseId}{finalAnimSuffix}.png";
                 string fullAnimPath = Path.Combine(_spritesPath, animFileName);
 
-                var sheetSource = GetOrCreateSprite(fullAnimPath) as BitmapSource;
+                BitmapSource sheetSource = null;
 
+                // Пробуем загрузить анимацию
+                if (File.Exists(fullAnimPath))
+                {
+                    sheetSource = LoadBitmap(fullAnimPath);
+                }
+
+                // Если анимации нет, пробуем статичный спрайт
                 if (sheetSource == null)
                 {
                     string staticPath = Path.Combine(_spritesPath, $"{baseId}.png");
-                    sheetSource = GetOrCreateSprite(staticPath) as BitmapSource;
+                    if (File.Exists(staticPath))
+                    {
+                        sheetSource = LoadBitmap(staticPath);
+                    }
+                }
+
+                // Если ничего нет - создаем заглушку
+                if (sheetSource == null)
+                {
+                    int size = character.FrameSize;
+                    var drawingVisual = new DrawingVisual();
+                    using (var context = drawingVisual.RenderOpen())
+                    {
+                        context.DrawRectangle(new SolidColorBrush(Colors.Magenta), null, new Rect(0, 0, size, size));
+                    }
+                    var renderTarget = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
+                    renderTarget.Render(drawingVisual);
+                    renderTarget.Freeze();
+                    sheetSource = renderTarget;
                 }
 
                 ImageSource currentSource = null;
 
                 if (sheetSource != null)
                 {
-                    int frameCount = sheetSource.PixelWidth / character.FrameSize;
-
-                    if (frameCount <= 1 || sheetSource.PixelWidth == character.FrameSize)
+                    // Если размеры некорректны - берем весь спрайт
+                    if (character.FrameSize <= 0 || sheetSource.PixelWidth < character.FrameSize)
                     {
                         currentSource = sheetSource;
                     }
                     else
                     {
-                        bool isMoving = character.Velocity.Length() > Epsilon;
+                        int frameCount = sheetSource.PixelWidth / character.FrameSize;
 
-                        if (!_animationTime.ContainsKey(visual))
-                            _animationTime[visual] = 0;
-
-                        if (isMoving)
-                            _animationTime[visual] += DefaultFrameDuration;
+                        // Одиночный спрайт без анимации
+                        if (frameCount <= 1 || sheetSource.PixelWidth == character.FrameSize)
+                        {
+                            currentSource = sheetSource;
+                        }
                         else
-                            _animationTime[visual] = 0;
+                        {
+                            bool isMoving = character.Velocity.Length() > Epsilon;
 
-                        int frameIndex = isMoving
-                            ? (int)(_animationTime[visual] / AnimationFrameTime) % frameCount
-                            : 0;
+                            // Управление временем анимации
+                            if (!_animationTime.ContainsKey(visual))
+                                _animationTime[visual] = 0;
 
-                        if (frameIndex >= frameCount)
-                            frameIndex = frameCount - 1;
+                            if (isMoving)
+                                _animationTime[visual] += DefaultFrameDuration;
+                            else
+                                _animationTime[visual] = 0;
 
-                        currentSource = GetOrCreateFrame(fullAnimPath, frameIndex, character.FrameSize, sheetSource);
+                            // Вычисляем текущий кадр
+                            int frameIndex = isMoving
+                                ? (int)(_animationTime[visual] / AnimationFrameTime) % frameCount
+                                : 0;
+
+                            if (frameIndex >= frameCount)
+                                frameIndex = frameCount - 1;
+
+                            try
+                            {
+                                // Вырезаем кадр напрямую без кэша
+                                int xPos = frameIndex * character.FrameSize;
+                                currentSource = new CroppedBitmap(sheetSource, new Int32Rect(xPos, 0, character.FrameSize, character.FrameSize));
+                                ((CroppedBitmap)currentSource).Freeze();
+                            }
+                            catch
+                            {
+                                currentSource = sheetSource;
+                            }
+                        }
                     }
                 }
 
                 if (currentSource == null)
                 {
-                    currentSource = CreatePlaceholder(PlaceholderError);
+                    currentSource = CreatePlaceholder(Colors.Red);
                 }
 
-                double displaySize = character.FrameSize;
+                // --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
+
+                // Базовый размер кадра
+                double baseDisplaySize = character.FrameSize;
+
+                // Применяем визуальный масштаб
+                double scaledWidth = baseDisplaySize * character.VisualScale;
+                double scaledHeight = baseDisplaySize * character.VisualScale;
+
                 visual.Source = currentSource;
-                visual.Width = displaySize;
-                visual.Height = displaySize;
+                visual.Width = scaledWidth;
+                visual.Height = scaledHeight;
                 visual.Stretch = Stretch.Uniform;
 
-                double left = character.Position.X - (displaySize / 2.0);
-                double top = character.Position.Y - (displaySize / 2.0);
+                // Позиционируем так, чтобы центр персонажа совпадал с character.Position
+                double left = character.Position.X - (scaledWidth / 2.0);
+                double top = character.Position.Y - (scaledHeight / 2.0);
+
                 Canvas.SetLeft(visual, left);
                 Canvas.SetTop(visual, top);
 
-                // Оптимизированное применение трансформаций
-                visual.RenderTransform = needsFlip ? _flipTransform : _normalTransform;
+                // Применяем трансформации: Отражение (если нужно) и Масштаб
+                // ScaleTransform(X, Y): 
+                // X = -1 * VisualScale если нужно отразить, иначе 1 * VisualScale
+                // Y = VisualScale
+                double scaleX = needsFlip ? -character.VisualScale : character.VisualScale;
+                double scaleY = character.VisualScale;
+
+                visual.RenderTransform = new ScaleTransform(scaleX, scaleY);
             }
         }
 
+        /// <summary>
+        /// Проверяет, можно ли пройти через клетку
+        /// </summary>
         public bool IsWalkable(int x, int y) => _grid.IsWalkable(x, y);
 
-        private BitmapImage LoadBitmap(string path)
+        /// <summary>
+        /// Загружает карту из текстовых файлов
+        /// </summary>
+        public void LoadMap(string backgroundPath,
+                            string largeDecorPath,
+                            Dictionary<char, (TileType type, string spriteId)> backgroundMappings,
+                            Dictionary<char, (TileType type, string spriteId, int width, int height)> largeDecorMappings,
+                            TileType defaultTileType = TileType.Floor)
         {
-            if (!File.Exists(path)) return null;
+            // Проверяем наличие файла фона
+            if (!File.Exists(backgroundPath))
+                throw new FileNotFoundException($"Файл фоновой карты не найден: {backgroundPath}");
 
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.UriSource = new Uri(path);
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.EndInit();
-            bmp.Freeze();
-            return bmp;
+            // Читаем карту фона
+            var bgLines = File.ReadAllLines(backgroundPath);
+            int mapHeight = bgLines.Length;
+            int mapWidth = bgLines[0].Length;
+
+            // Проверяем, что все строки одинаковой длины
+            for (int i = 0; i < bgLines.Length; i++)
+            {
+                if (bgLines[i].Length != mapWidth)
+                    throw new InvalidOperationException($"Строка {i + 1} фоновой карты имеет длину {bgLines[i].Length}, ожидается {mapWidth}");
+            }
+
+            // Читаем карту крупного декора, если указана
+            string[] largeDecorLines = null;
+            if (!string.IsNullOrEmpty(largeDecorPath) && File.Exists(largeDecorPath))
+            {
+                largeDecorLines = File.ReadAllLines(largeDecorPath);
+                if (largeDecorLines.Length != mapHeight)
+                    throw new InvalidOperationException($"Высота крупного декора ({largeDecorLines.Length}) не совпадает с фоном ({mapHeight})");
+                for (int i = 0; i < largeDecorLines.Length; i++)
+                {
+                    if (largeDecorLines[i].Length != mapWidth)
+                        throw new InvalidOperationException($"Строка {i + 1} крупного декора имеет длину {largeDecorLines[i].Length}, ожидается {mapWidth}");
+                }
+            }
+
+            // Очищаем текущий список крупного декора
+            _largeDecors.Clear();
+
+            // Загружаем фон
+            for (int y = 0; y < Math.Min(mapHeight, _grid.Height); y++)
+            {
+                string bgLine = bgLines[y];
+                for (int x = 0; x < Math.Min(mapWidth, _grid.Width); x++)
+                {
+                    char bgSymbol = bgLine[x];
+                    if (char.IsWhiteSpace(bgSymbol)) continue;
+
+                    if (backgroundMappings.TryGetValue(bgSymbol, out var bgMapping))
+                    {
+                        _grid.UpdateCell(x, y, bgMapping.type, bgMapping.spriteId);
+                    }
+                    else
+                    {
+                        _grid.UpdateCell(x, y, defaultTileType, null);
+                    }
+                }
+            }
+
+            // Загружаем крупный декор
+            if (largeDecorLines != null && largeDecorMappings != null)
+            {
+                for (int y = 0; y < Math.Min(mapHeight, _grid.Height); y++)
+                {
+                    string line = largeDecorLines[y];
+                    for (int x = 0; x < Math.Min(mapWidth, _grid.Width); x++)
+                    {
+                        if (x >= line.Length) continue;
+                        char symbol = line[x];
+                        if (char.IsWhiteSpace(symbol)) continue;
+
+                        if (largeDecorMappings.TryGetValue(symbol, out var decor))
+                        {
+                            // Добавляем крупный декор
+                            _largeDecors.Add(new LargeDecor
+                            {
+                                X = x,
+                                Y = y,
+                                SpriteId = decor.spriteId,
+                                Width = decor.width,
+                                Height = decor.height,
+                                Type = decor.type
+                            });
+
+                            // Делаем все клетки декора непроходимыми
+                            for (int dy = 0; dy < decor.height; dy++)
+                            {
+                                for (int dx = 0; dx < decor.width; dx++)
+                                {
+                                    int newX = x + dx;
+                                    int newY = y + dy;
+                                    if (_grid.InBounds(newX, newY))
+                                    {
+                                        _grid.UpdateCell(newX, newY, decor.type, null);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Перерисовываем всё
+            DrawStaticMap();
+            DrawLargeDecors();
+            DrawItems();
         }
 
+        // Обновление визуальных эффектов предметов
         public void RefreshItemsVisuals()
         {
             DrawItems();
         }
 
-        private ImageSource CreatePlaceholder(Color color)
+        // Полное обновление карты
+        public void RefreshMap()
         {
-            var drawing = new DrawingGroup();
-            drawing.Children.Add(new GeometryDrawing
-            {
-                Brush = new SolidColorBrush(color),
-                Geometry = new RectangleGeometry(new Rect(0, 0, TileSize, TileSize))
-            });
-            return new DrawingImage(drawing);
+            DrawStaticMap();
+            DrawLargeDecors();
+            DrawItems();
         }
 
-        // Вспомогательный класс для предметов на земле
+        // Внутренний класс для хранения предметов на земле
         private class GroundItem
         {
             public int X { get; }
@@ -488,13 +802,10 @@ namespace GameProj
             }
         }
     }
-    
 
-
-
-
-
-
+    /// <summary>
+    /// Движок физики для обработки столкновений
+    /// </summary>
     public class PhysicsEngine
     {
         private const int TileSize = 32;
@@ -507,176 +818,183 @@ namespace GameProj
             _grid = grid ?? throw new ArgumentNullException(nameof(grid));
         }
 
+        /// <summary>
+        /// Обновляет столкновения для всех персонажей
+        /// </summary>
         public void UpdateCollisions(List<Character> characters)
         {
-            foreach (var ch in characters)
+            foreach (var ch in characters.Where(c => c.IsAlive))
             {
-                if (!ch.IsAlive) continue;
-
+                // Исправляем застревание в стенах
                 CorrectStuckPosition(ch);
 
-                Vector2D oldPosition = ch.Position;
-                Vector2D newPosition = new Vector2D(
-                    ch.Position.X + ch.Velocity.X,
-                    ch.Position.Y + ch.Velocity.Y
-                );
+                Vector2D oldPos = ch.Position;
+                Vector2D newPos = oldPos + ch.Velocity;
 
-                if (TryResolveCollision(ch, oldPosition, newPosition, out Vector2D resolvedPosition))
+                // Пытаемся разрешить коллизию
+                if (TryResolveCollision(ch, oldPos, newPos, out Vector2D resolvedPos))
                 {
-                    ch.Position = resolvedPosition;
+                    ch.Position = resolvedPos;
 
-                    if (Math.Abs(ch.Position.X - oldPosition.X) < Epsilon)
-                        ch.Velocity.X = 0;
-                    if (Math.Abs(ch.Position.Y - oldPosition.Y) < Epsilon)
-                        ch.Velocity.Y = 0;
+                    // Если движение заблокировано, обнуляем скорость по соответствующей оси
+                    if (Math.Abs(ch.Position.X - oldPos.X) < Epsilon) ch.Velocity.X = 0;
+                    if (Math.Abs(ch.Position.Y - oldPos.Y) < Epsilon) ch.Velocity.Y = 0;
                 }
                 else
                 {
-                    ch.Position = newPosition;
+                    ch.Position = newPos;
                 }
 
-                // Обнуляем очень маленькие скорости
+                // Очищаем очень маленькие скорости
                 if (Math.Abs(ch.Velocity.X) < Epsilon) ch.Velocity.X = 0;
                 if (Math.Abs(ch.Velocity.Y) < Epsilon) ch.Velocity.Y = 0;
             }
         }
 
+        /// <summary>
+        /// Пытается разрешить коллизию, возвращает true если коллизия была
+        /// </summary>
         private bool TryResolveCollision(Character ch, Vector2D oldPos, Vector2D newPos, out Vector2D resolvedPos)
         {
-            Vector2D direction = new Vector2D(newPos.X - oldPos.X, newPos.Y - oldPos.Y);
-            double distance = direction.Length();
-
-            if (distance < Epsilon)
+            // Если движения нет или новая позиция не вызывает коллизию
+            if ((newPos - oldPos).Length() < Epsilon || !CheckCollisionAtPosition(ch, newPos, out _))
             {
                 resolvedPos = newPos;
                 return false;
             }
 
-            direction = new Vector2D(direction.X / distance, direction.Y / distance);
-            double stepSize = Math.Min(TileSize / 4.0, distance / 10.0);
-
-            Vector2D lastValidPos = oldPos;
-
-            for (double t = stepSize; t <= distance; t += stepSize)
-            {
-                Vector2D checkPoint = new Vector2D(
-                    oldPos.X + direction.X * t,
-                    oldPos.Y + direction.Y * t
-                );
-
-                if (CheckPositionCollision(ch, checkPoint, out Vector2D collisionPoint))
-                {
-                    resolvedPos = lastValidPos;
-                    return true;
-                }
-
-                lastValidPos = checkPoint;
-            }
-
-            resolvedPos = newPos;
-            return false;
+            // Ищем позицию перед столкновением бинарным поиском
+            resolvedPos = BinarySearchCollision(ch, oldPos, newPos);
+            return true;
         }
 
-        private bool CheckPositionCollision(Character ch, Vector2D position, out Vector2D collisionPoint)
+        /// <summary>
+        /// Бинарный поиск позиции перед столкновением
+        /// </summary>
+        private Vector2D BinarySearchCollision(Character ch, Vector2D start, Vector2D end, int depth = 8)
+        {
+            if (depth <= 0) return start;
+
+            Vector2D mid = (start + end) / 2;
+
+            bool midCollides = CheckCollisionAtPosition(ch, mid, out _);
+            bool endCollides = CheckCollisionAtPosition(ch, end, out _);
+
+            if (midCollides)
+                return BinarySearchCollision(ch, start, mid, depth - 1);
+            else if (endCollides)
+                return BinarySearchCollision(ch, mid, end, depth - 1);
+            else
+                return end;
+        }
+
+        /// <summary>
+        /// Проверяет, есть ли коллизия в указанной позиции
+        /// </summary>
+        private bool CheckCollisionAtPosition(Character ch, Vector2D position, out Vector2D pushVector)
         {
             double halfSize = ch.Size / 2.0;
-            double left = position.X - halfSize;
-            double right = position.X + halfSize;
-            double top = position.Y - halfSize;
-            double bottom = position.Y + halfSize;
+            Rect charRect = new Rect(
+                position.X - halfSize,
+                position.Y - halfSize,
+                ch.Size,
+                ch.Size
+            );
 
-            int minCol = (int)Math.Floor(left / TileSize);
-            int maxCol = (int)Math.Floor((right - Epsilon) / TileSize);
-            int minRow = (int)Math.Floor(top / TileSize);
-            int maxRow = (int)Math.Floor((bottom - Epsilon) / TileSize);
+            // Получаем все стены, пересекающиеся с персонажем
+            var intersectingWalls = GetIntersectingWalls(charRect);
+
+            if (!intersectingWalls.Any())
+            {
+                pushVector = Vector2D.Zero;
+                return false;
+            }
+
+            // Вычисляем вектор выталкивания
+            pushVector = CalculatePushVector(charRect, intersectingWalls);
+            return true;
+        }
+
+        /// <summary>
+        /// Получает все стены, пересекающиеся с прямоугольником
+        /// </summary>
+        private List<Rect> GetIntersectingWalls(Rect charRect)
+        {
+            // Определяем диапазон клеток, которые пересекаются с прямоугольником
+            int minCol = (int)Math.Floor(charRect.Left / TileSize);
+            int maxCol = (int)Math.Floor((charRect.Right - Epsilon) / TileSize);
+            int minRow = (int)Math.Floor(charRect.Top / TileSize);
+            int maxRow = (int)Math.Floor((charRect.Bottom - Epsilon) / TileSize);
+
+            var walls = new List<Rect>();
 
             for (int c = minCol; c <= maxCol; c++)
             {
                 for (int r = minRow; r <= maxRow; r++)
                 {
-                    if (!_grid.InBounds(c, r)) continue;
-                    if (_grid[c, r].IsWalkable()) continue;
-
-                    Rect wallRect = new Rect(c * TileSize, r * TileSize, TileSize, TileSize);
-                    Rect charRect = new Rect(left, top, ch.Size, ch.Size);
-
-                    if (wallRect.IntersectsWith(charRect))
+                    if (_grid.InBounds(c, r) && !_grid[c, r].IsWalkable())
                     {
-                        collisionPoint = CalculateCollisionPoint(wallRect, charRect, position, halfSize);
-                        return true;
+                        walls.Add(new Rect(c * TileSize, r * TileSize, TileSize, TileSize));
                     }
                 }
             }
 
-            collisionPoint = position;
-            return false;
+            return walls;
         }
 
-        private Vector2D CalculateCollisionPoint(Rect wallRect, Rect charRect, Vector2D position, double halfSize)
+        /// <summary>
+        /// Вычисляет вектор выталкивания для разрешения коллизии
+        /// </summary>
+        private Vector2D CalculatePushVector(Rect charRect, List<Rect> walls)
         {
-            double overlapLeft = charRect.Right - wallRect.Left;
-            double overlapRight = wallRect.Right - charRect.Left;
-            double overlapTop = charRect.Bottom - wallRect.Top;
-            double overlapBottom = wallRect.Bottom - charRect.Top;
+            Vector2D push = Vector2D.Zero;
 
-            double minOverlap = Math.Min(Math.Min(overlapLeft, overlapRight), Math.Min(overlapTop, overlapBottom));
+            foreach (var wall in walls)
+            {
+                // Вычисляем перекрытие с каждой стороной стены
+                double overlapLeft = charRect.Right - wall.Left;
+                double overlapRight = wall.Right - charRect.Left;
+                double overlapTop = charRect.Bottom - wall.Top;
+                double overlapBottom = wall.Bottom - charRect.Top;
 
-            if (Math.Abs(minOverlap - overlapLeft) < Epsilon)
-                return new Vector2D(wallRect.Left - halfSize - Epsilon, position.Y);
-            else if (Math.Abs(minOverlap - overlapRight) < Epsilon)
-                return new Vector2D(wallRect.Right + halfSize + Epsilon, position.Y);
-            else if (Math.Abs(minOverlap - overlapTop) < Epsilon)
-                return new Vector2D(position.X, wallRect.Top - halfSize - Epsilon);
-            else
-                return new Vector2D(position.X, wallRect.Bottom + halfSize + Epsilon);
+                // Находим минимальное перекрытие
+                double minOverlap = Math.Min(Math.Min(overlapLeft, overlapRight),
+                                           Math.Min(overlapTop, overlapBottom));
+
+                // Выталкиваем в направлении минимального перекрытия
+                if (Math.Abs(minOverlap - overlapLeft) < Epsilon)
+                    push.X -= overlapLeft + Epsilon;
+                else if (Math.Abs(minOverlap - overlapRight) < Epsilon)
+                    push.X += overlapRight + Epsilon;
+                else if (Math.Abs(minOverlap - overlapTop) < Epsilon)
+                    push.Y -= overlapTop + Epsilon;
+                else
+                    push.Y += overlapBottom + Epsilon;
+            }
+
+            return push;
         }
 
+        /// <summary>
+        /// Исправляет застревание персонажа в стенах
+        /// </summary>
         private void CorrectStuckPosition(Character ch)
         {
             double halfSize = ch.Size / 2.0;
-            double left = ch.Position.X - halfSize;
-            double right = ch.Position.X + halfSize;
-            double top = ch.Position.Y - halfSize;
-            double bottom = ch.Position.Y + halfSize;
+            Rect charRect = new Rect(
+                ch.Position.X - halfSize,
+                ch.Position.Y - halfSize,
+                ch.Size,
+                ch.Size
+            );
 
-            int minCol = (int)Math.Floor(left / TileSize);
-            int maxCol = (int)Math.Floor((right - Epsilon) / TileSize);
-            int minRow = (int)Math.Floor(top / TileSize);
-            int maxRow = (int)Math.Floor((bottom - Epsilon) / TileSize);
+            var walls = GetIntersectingWalls(charRect);
 
-            for (int c = minCol; c <= maxCol; c++)
+            if (walls.Any())
             {
-                for (int r = minRow; r <= maxRow; r++)
-                {
-                    if (!_grid.InBounds(c, r)) continue;
-                    if (_grid[c, r].IsWalkable()) continue;
-
-                    Rect wallRect = new Rect(c * TileSize, r * TileSize, TileSize, TileSize);
-                    Rect charRect = new Rect(left, top, ch.Size, ch.Size);
-
-                    if (wallRect.IntersectsWith(charRect))
-                    {
-                        double overlapLeft = charRect.Right - wallRect.Left;
-                        double overlapRight = wallRect.Right - charRect.Left;
-                        double overlapTop = charRect.Bottom - wallRect.Top;
-                        double overlapBottom = wallRect.Bottom - charRect.Top;
-
-                        double minOverlap = Math.Min(Math.Min(overlapLeft, overlapRight), Math.Min(overlapTop, overlapBottom));
-
-                        if (Math.Abs(minOverlap - overlapLeft) < Epsilon)
-                            ch.Position.X -= overlapLeft + Epsilon;
-                        else if (Math.Abs(minOverlap - overlapRight) < Epsilon)
-                            ch.Position.X += overlapRight + Epsilon;
-                        else if (Math.Abs(minOverlap - overlapTop) < Epsilon)
-                            ch.Position.Y -= overlapTop + Epsilon;
-                        else
-                            ch.Position.Y += overlapBottom + Epsilon;
-
-                        return;
-                    }
-                }
+                Vector2D push = CalculatePushVector(charRect, walls);
+                ch.Position += push;
             }
         }
     }
 }
-
