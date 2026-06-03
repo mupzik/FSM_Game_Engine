@@ -16,7 +16,6 @@ C:\Users\rozde\source\repos\GameProj\obj\Debug\GameProj.csproj.GenerateResource.
 C:\Users\rozde\source\repos\GameProj\obj\Debug\GameProj.csproj.CoreCompileInputs.cache
 C:\Users\rozde\source\repos\GameProj\obj\Debug\GameProj.exe
 C:\Users\rozde\source\repos\GameProj\obj\Debug\GameProj.pdb
-C:\Users\rozde\source\repos\GameProj\obj\Debug\GameProj.exe.config
 C:\Users\rozde\source\repos\GameProj\bin\Debug\Microsoft.Bcl.AsyncInterfaces.dll
 C:\Users\rozde\source\repos\GameProj\bin\Debug\Newtonsoft.Json.dll
 C:\Users\rozde\source\repos\GameProj\bin\Debug\System.Buffers.dll
@@ -38,3 +37,4 @@ C:\Users\rozde\source\repos\GameProj\bin\Debug\System.Text.Encodings.Web.xml
 C:\Users\rozde\source\repos\GameProj\bin\Debug\System.Text.Json.xml
 C:\Users\rozde\source\repos\GameProj\bin\Debug\System.Threading.Tasks.Extensions.xml
 C:\Users\rozde\source\repos\GameProj\obj\Debug\GameProj.csproj.Up2Date
+C:\Users\rozde\source\repos\GameProj\obj\Debug\GameProj.exe.config

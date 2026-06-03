@@ -83,7 +83,7 @@ namespace GameProj.src
     {
         private readonly Tile[,] _grid;
 
-        // ✅ Теперь это обычное поле, а не константа. Можно менять в конструкторе.
+        // Теперь это обычное поле, а не константа. Можно менять в конструкторе.
         public int TileSize { get; private set; }
 
         public int Width { get; }
@@ -106,7 +106,6 @@ namespace GameProj.src
                     _grid[x, y] = new Tile(TileType.Floor, sprite);
         }
 
-        // ... (остальные методы: PlaceItem, indexer, InBounds, IsWalkable, UpdateCell - без изменений) ...
 
         public void PlaceItem(int x, int y, Item item)
         {
@@ -145,7 +144,6 @@ namespace GameProj.src
             if (trigger != null) tile.Trigger = trigger;
         }
 
-        // ✅ ИСПРАВЛЕННЫЙ GetTileBounds
         // Rect принимает (X, Y, Width, Height), а не (Left, Top, Right, Bottom)
         public Rect GetTileBounds(int x, int y)
         {
@@ -153,7 +151,6 @@ namespace GameProj.src
             return new Rect(x * TileSize, y * TileSize, TileSize, TileSize);
         }
 
-        // ✅ МЕТОДЫ СТАЛИ НЕСТАТИЧЕСКИМИ
         // Теперь они используют this.TileSize
 
         /// <summary>

@@ -3,16 +3,157 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:GameProj"
              mc:Ignorable="d" 
              d:DesignHeight="600" d:DesignWidth="800"
              Focusable="True"
              Background="Black">
+
+    <UserControl.Resources>
+        <!-- Стиль для текста предметов инвентаря -->
+        <Style TargetType="TextBlock" x:Key="ItemTextStyle">
+            <Setter Property="FontSize" Value="28"/>
+            <Setter Property="Margin" Value="10,8"/>
+            <Setter Property="Foreground" Value="Black"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter Property="Foreground" Value="DarkRed"/>
+                    <Setter Property="FontWeight" Value="Bold"/>
+                    <Setter Property="FontSize" Value="32"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Кисть для левой панели инвентаря (правая половина Setting_menu.png) -->
+        <ImageBrush x:Key="LeftPanelBrush" 
+                    ImageSource="/Setting_menu.png"
+                    Viewbox="0.5,0,0.5,1"
+                    ViewboxUnits="RelativeToBoundingBox"
+                    Stretch="Fill"/>
+
+        <!-- Кисть для правой панели инвентаря (Dialog_box.png) -->
+        <ImageBrush x:Key="RightPanelBrush" 
+                    ImageSource="/Dialog_box.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+    </UserControl.Resources>
+
     <Grid>
+        <!-- Основная игровая область -->
         <Grid x:Name="GameContainer" ClipToBounds="True">
             <Canvas x:Name="GameArea" Background="Black" 
                     Width="{Binding ActualWidth, ElementName=GameContainer}"
                     Height="{Binding ActualHeight, ElementName=GameContainer}"/>
         </Grid>
+
+        <!-- Оверлей для UI элементов -->
         <Canvas x:Name="OverlayCanvas" Background="Transparent" IsHitTestVisible="False"/>
+
+        <!-- Диалоговое окно -->
+        <Border x:Name="DialogueBox" 
+                Width="840" 
+                Height="168" 
+                Padding="40,15,40,15"
+                CornerRadius="5"
+                Canvas.ZIndex="200"
+                VerticalAlignment="Bottom"
+                HorizontalAlignment="Center"
+                Margin="0,0,0,50"
+                Visibility="Collapsed">
+            <Border.Background>
+                <ImageBrush ImageSource="/Dialog_box.png" Stretch="Fill"/>
+            </Border.Background>
+            <TextBlock x:Name="DialogueText" 
+                       FontSize="22" 
+                       Foreground="Black" 
+                       TextWrapping="Wrap" 
+                       FontWeight="Bold" 
+                       TextAlignment="Left" 
+                       VerticalAlignment="Center" 
+                       HorizontalAlignment="Left"
+                       MaxWidth="530"/>
+        </Border>
+
+        <!-- Окно проигрыша/победы -->
+        <Border x:Name="GameOverBox" 
+                Width="500"
+                Height="250"
+                CornerRadius="15"
+                Canvas.ZIndex="1000"
+                Visibility="Collapsed"
+                Background="#CC000000"
+                VerticalAlignment="Center"
+                HorizontalAlignment="Center">
+            <TextBlock x:Name="GameOverText" 
+                       FontSize="40" 
+                       FontWeight="Bold" 
+                       Foreground="White"
+                       TextAlignment="Center" 
+                       VerticalAlignment="Center"
+                       HorizontalAlignment="Center"
+                       TextWrapping="Wrap"/>
+        </Border>
+
+        <!-- Инвентарь (скрыт по умолчанию) -->
+        <Border x:Name="InventoryPanel" 
+                Width="800" 
+                Height="600"
+                Canvas.ZIndex="300"
+                Background="Transparent"
+                Visibility="Collapsed"
+                Focusable="True"
+                FocusVisualStyle="{x:Null}">
+            <Grid>
+                <!-- Левая панель с фоном - список предметов -->
+                <Border 
+                        CornerRadius="15" 
+                        Background="{StaticResource LeftPanelBrush}"
+                        Margin="20,20,300,20"
+                        Focusable="False">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" 
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Margin="30,20,30,20"
+                                  Focusable="False" >
+                        <ItemsControl x:Name="InventoryItemsControl" 
+                                      Focusable="False"
+                                      Background="Transparent" Height="438" Width="354">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding DisplayText}" 
+                                               Style="{StaticResource ItemTextStyle}"
+                                               Background="Transparent"
+                                               Focusable="False"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- Правая панель описания предмета -->
+                <Border Width="356" 
+                        Height="188"
+                        HorizontalAlignment="Right" 
+                        VerticalAlignment="Bottom"
+                        Margin="0,0,10,340"
+                        Background="{StaticResource RightPanelBrush}"
+                        CornerRadius="10"
+                        Focusable="False">
+                    <TextBlock x:Name="InventoryDescriptionText"
+                               Foreground="#3E2723" 
+                               FontSize="20" 
+                               FontWeight="Medium"
+                               TextWrapping="Wrap" 
+                               Margin="15,15,15,15"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center"
+                               TextAlignment="Center"
+                               Text="Нет предметов"
+                               Focusable="False"/>
+                </Border>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

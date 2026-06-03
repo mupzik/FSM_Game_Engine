@@ -61,13 +61,11 @@ namespace GameProj.src
         /// <returns>Новое количество или 0 если предмет закончился</returns>
         public int ChangeQuantity(int amount)
         {
-            // Нестакаемые предметы нельзя изменять
             if (!IsStackable && amount != 0)
                 throw new InvalidOperationException("Non-stackable items cannot change quantity");
 
-            Quantity += amount;
+            Quantity += amount; 
 
-            // Если количество стало 0 или меньше, обнуляем
             if (Quantity <= 0)
             {
                 Quantity = 0;
@@ -76,7 +74,6 @@ namespace GameProj.src
 
             return Quantity;
         }
-
         /// <summary>
         /// Создает полную копию предмета
         /// </summary>
@@ -105,27 +102,37 @@ namespace GameProj.src
     }
 
     /// <summary>
-    /// Система инвентаря с сеткой ячеек
+    /// Система инвентаря с использованием словаря для быстрого доступа
     /// </summary>
     public class Inventory
     {
         // Событие при изменении предметов в ячейках
         public event Action<IEnumerable<int>> ItemsChanged;
 
+        // Хранилище предметов: ключ - ID предмета, значение - список предметов в разных слотах
+        private Dictionary<string, List<StoredItem>> _items;
+
+        // Для быстрого доступа к предмету по слоту
+        private Dictionary<int, StoredItem> _slotMap;
+
         // Размеры сетки инвентаря
         public int Columns { get; private set; }
         public int Rows { get; private set; }
-        // Общее количество ячеек
         public int TotalSlots { get { return Columns * Rows; } }
 
-        // Внутренний массив предметов
-        private readonly Item[] _items;
+        // Следующий свободный слот
+        private int _nextFreeSlot;
+
+        // Вспомогательный класс для хранения предмета в слоте
+        private class StoredItem
+        {
+            public Item Item { get; set; }
+            public int Slot { get; set; }
+        }
 
         /// <summary>
         /// Создает инвентарь с указанными размерами
         /// </summary>
-        /// <param name="columns">Количество колонок (по умолчанию 5)</param>
-        /// <param name="rows">Количество строк (по умолчанию 5)</param>
         public Inventory(int columns = 5, int rows = 5)
         {
             if (columns <= 0 || rows <= 0)
@@ -133,7 +140,9 @@ namespace GameProj.src
 
             Columns = columns;
             Rows = rows;
-            _items = new Item[TotalSlots];
+            _items = new Dictionary<string, List<StoredItem>>();
+            _slotMap = new Dictionary<int, StoredItem>();
+            _nextFreeSlot = 0;
         }
 
         /// <summary>
@@ -142,148 +151,188 @@ namespace GameProj.src
         public Item GetItem(int index)
         {
             ValidateIndex(index);
-            return _items[index];
-        }
-
-        /// <summary>
-        /// Устанавливает предмет в ячейку
-        /// </summary>
-        /// <returns>Предмет, который был в ячейке ранее</returns>
-        public Item SetItem(int index, Item item)
-        {
-            ValidateIndex(index);
-            var previousItem = _items[index];
-            _items[index] = item;
-            NotifyItemsChanged(index);
-            return previousItem;
-        }
-
-        /// <summary>
-        /// Удаляет все предметы с указанным ключом (первый найденный)
-        /// </summary>
-        public void RemoveItem(string itemKey)
-        {
-            for (int i = 0; i < TotalSlots; i++)
-            {
-                if (_items[i] != null && _items[i].Key == itemKey)
-                {
-                    _items[i] = null;
-                    NotifyItemsChanged(i);
-                    return;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Изменяет количество предмета в указанной ячейке
-        /// </summary>
-        /// <returns>true если изменение успешно, false если ячейка пуста</returns>
-        public bool ModifyItemQuantity(int index, int amount)
-        {
-            ValidateIndex(index);
-            var item = _items[index];
-            if (item == null) return false;
-
-            int newQuantity = item.ChangeQuantity(amount);
-            // Если предметов не осталось, очищаем ячейку
-            if (newQuantity == 0) _items[index] = null;
-
-            NotifyItemsChanged(index);
-            return true;
+            return _slotMap.ContainsKey(index) ? _slotMap[index].Item : null;
         }
 
         /// <summary>
         /// Добавляет предмет в инвентарь
         /// </summary>
-        /// <returns>Индекс ячейки, где оказался предмет, или -1 если места нет</returns>
-        public int AddItem(Item item)
+        public bool AddItem(Item item, int quantity = 1)
         {
             if (item == null) throw new ArgumentNullException("item");
+            if (quantity <= 0) return false;
 
-            // Для стакаемых предметов сначала ищем существующую стопку
+            int remainingToAdd = quantity;
+
+            // Для стакаемых предметов - ищем существующие стеки
             if (item.IsStackable)
             {
-                for (int i = 0; i < TotalSlots; i++)
+                if (_items.ContainsKey(item.Key))
                 {
-                    var existingItem = _items[i];
-                    if (existingItem != null && existingItem.CanStackWith(item))
+                    var stacks = _items[item.Key];
+                    foreach (var storedItem in stacks)
                     {
-                        existingItem.ChangeQuantity(item.Quantity);
-                        NotifyItemsChanged(i);
-                        return i;
+                        int canAdd = int.MaxValue; // Можно добавить сколько угодно
+                        storedItem.Item.ChangeQuantity(remainingToAdd);
+                        NotifyItemsChanged(storedItem.Slot);
+                        return true;
                     }
                 }
             }
 
-            // Ищем первую пустую ячейку
-            for (int i = 0; i < TotalSlots; i++)
+            // Добавляем в новые слоты
+            while (remainingToAdd > 0)
             {
-                if (_items[i] == null)
+                if (_nextFreeSlot >= TotalSlots) return false; // Нет свободных слотов
+
+                int stackSize = item.IsStackable ? remainingToAdd : 1;
+                Item newItem = item.Clone();
+                if (item.IsStackable)
                 {
-                    _items[i] = item.Clone();
-                    NotifyItemsChanged(i);
-                    return i;
+                    newItem.ChangeQuantity(stackSize - 1);
+                }
+
+                var storedItem = new StoredItem
+                {
+                    Item = newItem,
+                    Slot = _nextFreeSlot
+                };
+
+                _slotMap[_nextFreeSlot] = storedItem;
+
+                if (!_items.ContainsKey(item.Key))
+                    _items[item.Key] = new List<StoredItem>();
+                _items[item.Key].Add(storedItem);
+
+                NotifyItemsChanged(_nextFreeSlot);
+
+                remainingToAdd -= stackSize;
+                _nextFreeSlot++;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Удаляет указанное количество предметов
+        /// </summary>
+        public bool RemoveItem(string itemKey, int amount = 1)
+        {
+            if (amount <= 0) return false;
+            if (!_items.ContainsKey(itemKey)) return false;
+
+            int remainingToRemove = amount;
+            var stacks = _items[itemKey];
+
+            for (int i = stacks.Count - 1; i >= 0 && remainingToRemove > 0; i--)
+            {
+                var storedItem = stacks[i];
+                var item = storedItem.Item;
+
+                if (item.Quantity <= remainingToRemove)
+                {
+                    // Удаляем весь стек
+                    remainingToRemove -= item.Quantity;
+                    _slotMap.Remove(storedItem.Slot);
+                    stacks.RemoveAt(i);
+                    NotifyItemsChanged(storedItem.Slot);
+
+                    // Обновляем _nextFreeSlot если удалили последний слот
+                    if (storedItem.Slot < _nextFreeSlot)
+                        _nextFreeSlot = storedItem.Slot;
+                }
+                else
+                {
+                    // Уменьшаем количество
+                    item.ChangeQuantity(-remainingToRemove);
+                    remainingToRemove = 0;
+                    NotifyItemsChanged(storedItem.Slot);
                 }
             }
 
-            // Нет свободного места
-            return -1;
+            // Если все стеки удалены, убираем ключ из словаря
+            if (_items[itemKey].Count == 0)
+                _items.Remove(itemKey);
+
+            return remainingToRemove == 0;
         }
 
         /// <summary>
-        /// Проверяет, есть ли предмет с указанным ключом в инвентаре
-        /// </summary>
-        public bool HasItem(string itemKey)
-        {
-            foreach (var item in _items)
-            {
-                if (item != null && item.Key == itemKey)
-                    return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Получает общее количество предметов с указанным ключом
+        /// Получает общее количество предметов
         /// </summary>
         public int GetTotalQuantity(string itemKey)
         {
+            if (!_items.ContainsKey(itemKey)) return 0;
+
             int total = 0;
-            foreach (var item in _items)
+            foreach (var storedItem in _items[itemKey])
             {
-                if (item != null && item.Key == itemKey)
-                    total += item.Quantity;
+                total += storedItem.Item.Quantity;
             }
             return total;
         }
 
         /// <summary>
-        /// Очищает весь инвентарь
+        /// Проверяет наличие предмета
+        /// </summary>
+        public bool HasItem(string itemKey)
+        {
+            return _items.ContainsKey(itemKey) && _items[itemKey].Count > 0;
+        }
+
+        /// <summary>
+        /// Изменяет количество предмета в указанной ячейке
+        /// </summary>
+        public bool ModifyItemQuantity(int index, int amount)
+        {
+            ValidateIndex(index);
+            if (!_slotMap.ContainsKey(index)) return false;
+
+            var storedItem = _slotMap[index];
+            var item = storedItem.Item;
+
+            if (!item.IsStackable)
+                throw new InvalidOperationException("Cannot modify quantity of non-stackable item");
+
+            int newQuantity = item.ChangeQuantity(amount);
+
+            if (newQuantity == 0)
+            {
+                // Удаляем предмет
+                RemoveItem(item.Key, item.Quantity);
+            }
+            else
+            {
+                NotifyItemsChanged(index);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Очищает инвентарь
         /// </summary>
         public void Clear()
         {
-            Array.Clear(_items, 0, _items.Length);
-            NotifyItemsChanged(-1); // -1 означает "все ячейки"
+            _items.Clear();
+            _slotMap.Clear();
+            _nextFreeSlot = 0;
+            NotifyItemsChanged(-1);
         }
 
-        // Проверяет, что индекс находится в допустимых пределах
+        // Проверяет индекс
         private void ValidateIndex(int index)
         {
             if (index < 0 || index >= TotalSlots)
-                throw new ArgumentOutOfRangeException("index",
-                    string.Format("Index must be between 0 and {0}", TotalSlots - 1));
+                throw new ArgumentOutOfRangeException("index");
         }
 
-        // Вызывает событие об изменении ячеек
+        // Вызывает событие об изменении
         private void NotifyItemsChanged(int index)
         {
-            if (ItemsChanged != null)
-            {
-                var indexes = index < 0
-                    ? (IEnumerable<int>)new int[TotalSlots] // Изменились все ячейки
-                    : new int[] { index }; // Изменилась одна ячейка
-                ItemsChanged(indexes);
-            }
+            ItemsChanged?.Invoke(index < 0
+                ? Enumerable.Range(0, TotalSlots)
+                : new int[] { index });
         }
     }
 

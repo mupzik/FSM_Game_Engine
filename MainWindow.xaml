@@ -5,16 +5,45 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:GameProj"
         mc:Ignorable="d"
-        Title="Игра" Height="999" Width="975" Icon="/Potion.png">
+        Title="Игра" Height="999" Width="975" Icon="/Potion.png" Cursor="">
+
+    <Window.Resources>
+        <!-- Простой стиль для кнопок -->
+        <Style TargetType="Button">
+            <Setter Property="Width" Value="200"/>
+            <Setter Property="Height" Value="50"/>
+            <Setter Property="Margin" Value="30"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Image x:Name="imgNormal" Source="/Button.png"/>
+                            <Image x:Name="imgHover" Source="/Button_pressed.png" Opacity="0"/>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="imgNormal" Property="Opacity" Value="0"/>
+                                <Setter TargetName="imgHover" Property="Opacity" Value="1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Grid>
-        <StackPanel x:Name="MainMenu" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,146,0,0" >
-            <Button x:Name="BtnStart" Content="Новая игра"  Click="BtnStart_Click" Width="200" Height="50"/>
-            <Button x:Name="BtnContinue" Content="Продолжить"  Click="BtnContinue_Click" Width="200" Height="50" IsEnabled="False" Margin="30"/>
-            <Button x:Name="BtnExit" Content="Выход" Click="BtnExit_Click" Width="200" Height="50"/>
+        <Grid.Background>
+            <ImageBrush ImageSource="/Background.png" Stretch="UniformToFill" Opacity="0.7" TileMode="Tile"/>
+        </Grid.Background>
+
+        <StackPanel x:Name="MainMenu" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,224,0,0" >
+            <Button x:Name="BtnStart" Content="Новая игра" Click="BtnStart_Click" Height="120" Width="480" FontSize="60" FontFamily="GOST type A" FontWeight="Bold"/>
+            <Button x:Name="BtnExit" Content="Выход" Click="BtnExit_Click" Height="120" Width="480" FontSize="60" FontFamily="GOST type A" FontWeight="Bold"/>
         </StackPanel>
 
         <local:GameCanvas x:Name="GameCanvas" Visibility="Collapsed" />
     </Grid>
-
-
 </Window>

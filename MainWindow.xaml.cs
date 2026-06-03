@@ -25,8 +25,7 @@ namespace GameProj
     public partial class MainWindow : Window
     {
 
-        private bool canContinue = false;
-        private int selectedButtonIndex = 0; // 0=Начать, 1=Продолжить, 2=Выход
+        private int selectedButtonIndex = 0; // 0=Начать, 1=Выход
 
         public MainWindow()
         {
@@ -90,13 +89,11 @@ namespace GameProj
 
         private void StartGame()
         {
-            canContinue = true;
-            BtnContinue.IsEnabled = true;
 
             MainMenu.Visibility = Visibility.Collapsed;
             GameCanvas.Visibility = Visibility.Visible;
 
-            GameCanvas.Restart(); // ← перезапуск логики
+            GameCanvas.Restart(); 
             GameCanvas.Focus();
         }
 
@@ -110,7 +107,8 @@ namespace GameProj
         }
 
         private void BtnStart_Click(object sender, RoutedEventArgs e) => StartGame();
-        private void BtnContinue_Click(object sender, RoutedEventArgs e) => StartGame();
         private void BtnExit_Click(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
+
+      
     }
 }

@@ -13,13 +13,17 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tiles", "Tiles", "{754FC069
 		bin\Debug\Tiles\Fence_U.png = bin\Debug\Tiles\Fence_U.png
 		bin\Debug\Tiles\Grass.png = bin\Debug\Tiles\Grass.png
 		bin\Debug\Tiles\Road.png = bin\Debug\Tiles\Road.png
+		bin\Debug\Tiles\Road1.png = bin\Debug\Tiles\Road1.png
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Элементы решения", "Элементы решения", "{D67283E7-82AA-4F47-BB3A-61F378F8496A}"
 	ProjectSection(SolutionItems) = preProject
+		bin\Debug\UI\But_clc.png = bin\Debug\UI\But_clc.png
 		bin\Debug\Maps\decor_large1.txt = bin\Debug\Maps\decor_large1.txt
-		bin\Debug\Maps\decor_small1.txt = bin\Debug\Maps\decor_small1.txt
+		bin\Debug\Maps\decor_large2.txt = bin\Debug\Maps\decor_large2.txt
+		bin\Debug\UI\Dialog_box.png = bin\Debug\UI\Dialog_box.png
 		bin\Debug\Maps\level1.txt = bin\Debug\Maps\level1.txt
+		bin\Debug\Maps\level2.txt = bin\Debug\Maps\level2.txt
 		bin\Debug\Sprites\MC_D_Walk.png = bin\Debug\Sprites\MC_D_Walk.png
 		bin\Debug\Sprites\MC_R_Walk.png = bin\Debug\Sprites\MC_R_Walk.png
 		bin\Debug\Sprites\MC_U_Walk.png = bin\Debug\Sprites\MC_U_Walk.png
@@ -28,6 +32,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Элементы решен
 		bin\Debug\Sprites\Orc_U_Walk.png = bin\Debug\Sprites\Orc_U_Walk.png
 		bin\Debug\Tiles\Road.png = bin\Debug\Tiles\Road.png
 		bin\Debug\Tiles\Road1.png = bin\Debug\Tiles\Road1.png
+		bin\Debug\UI\Setting_menu.png = bin\Debug\UI\Setting_menu.png
 		bin\Debug\Sprites\Slime_Death.png = bin\Debug\Sprites\Slime_Death.png
 		bin\Debug\Sprites\Slime_D_Walk.png = bin\Debug\Sprites\Slime_D_Walk.png
 		bin\Debug\Sprites\Slime_R_Walk.png = bin\Debug\Sprites\Slime_R_Walk.png

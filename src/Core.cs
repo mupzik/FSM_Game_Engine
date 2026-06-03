@@ -61,7 +61,7 @@ namespace GameProj.src
     /// <summary>
     /// Конечный автомат (Finite State Machine).
     /// </summary>
-    public class FSM<TState, TEvent>
+    public class FSM<TState, TEvent> 
     {
         public State<TState, TEvent> CurrentState { get; private set; }
         public TState LastState { get; set; }
