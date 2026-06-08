@@ -81,7 +81,7 @@ namespace GameProj
 
         // Свойства здоровья
         public float Health { get; private set; }
-        public float MaxHealth { get; private set; }
+        public float MaxHealth { get;  set; }
         protected float _strength;
         public float Strength
         {
@@ -101,6 +101,22 @@ namespace GameProj
         public double VisualScale { get; set; } = 1.0;
         public bool IsFacingRight { get; set; } = true;
 
+        // Хитбоксы и коллизии
+        private double _hitboxRadius = 40.0;
+        private double _collisionRadius = 20.0;
+
+        public double HitboxRadius
+        {
+            get => _hitboxRadius;
+            set => _hitboxRadius = Math.Max(10, value);
+        }
+
+        public double CollisionRadius
+        {
+            get => _collisionRadius;
+            set => _collisionRadius = Math.Max(5, value);
+        }
+
         // Виртуальные свойства
         public virtual double Size => DefaultCharacterSize;
         protected virtual double InteractionRadius => DefaultInteractionRadius;
@@ -119,7 +135,9 @@ namespace GameProj
             IDialogueProvider dialogueProvider = null,
             string spritePath = "",
             double visualScale = 1.0,
-            SpriteInfo? spriteInfo = null)
+            SpriteInfo? spriteInfo = null,
+            double hitboxRadius = 40.0,
+            double collisionRadius = 20.0)
         {
             Position = startPosition;
             Velocity = Vector2D.Zero;
@@ -133,6 +151,8 @@ namespace GameProj
             DialogueProvider = dialogueProvider;
             SpritePath = spritePath;
             SpriteData = spriteInfo ?? new SpriteInfo(id, 48, 48);
+            _hitboxRadius = Math.Max(10, hitboxRadius);
+            _collisionRadius = Math.Max(5, collisionRadius);
         }
 
         public virtual void Update()
@@ -164,9 +184,7 @@ namespace GameProj
         public virtual void Die()
         {
             if (!IsAlive) return;
-            Health = 0;
             Stop();
-            OnDeath();
         }
 
         public virtual void Heal(float amount)
@@ -193,13 +211,29 @@ namespace GameProj
             OnHealthChanged?.Invoke(this, -actualDamage);
         }
 
+        public void SetMaxHealth(float newMaxHealth)
+        {
+            if (newMaxHealth <= 0) return;
+
+            float difference = newMaxHealth - MaxHealth;
+            MaxHealth = newMaxHealth;
+
+            if (difference > 0)
+                Health += difference;
+            else if (Health > MaxHealth)
+                Health = MaxHealth;
+        }
+
+        public void ResetHealth()
+        {
+            Health = MaxHealth;
+        }
+
         public virtual void Attack(Character enemy)
         {
             if (!IsAlive || enemy == null || !enemy.IsAlive) return;
             enemy.TakeDamage(Strength);
         }
-
-        protected virtual void OnDeath() { }
 
         public virtual bool CanInteractWith(Character other, double? maxDistance = null)
         {
@@ -272,10 +306,14 @@ namespace GameProj
             IDialogueProvider dialogueProvider = null,
             string spritePath = "",
             double visualScale = 1.0,
-            SpriteInfo? spriteInfo = null)
+            SpriteInfo? spriteInfo = null,
+            double hitboxRadius = 40.0,
+            double collisionRadius = 20.0)
             : base(startPosition, id, speed, health, strength: 1f,
                    inventory: inventory, dialogueProvider: dialogueProvider,
-                   spritePath: spritePath, visualScale: visualScale, spriteInfo: spriteInfo)
+                   spritePath: spritePath, visualScale: visualScale,
+                   spriteInfo: spriteInfo, hitboxRadius: hitboxRadius,
+                   collisionRadius: collisionRadius)
         { }
 
         public void SetPosition(double x, double y)
@@ -304,39 +342,33 @@ namespace GameProj
                 IDialogueProvider dialogueProvider = null,
                 string spritePath = "",
                 double visualScale = 1.0,
-                SpriteInfo? spriteInfo = null)
+                SpriteInfo? spriteInfo = null,
+                double hitboxRadius = 40.0,
+                double collisionRadius = 20.0)
             : base(startPosition, id, speed, health, strength,
-                   inventory, dialogueProvider, spritePath, visualScale, spriteInfo)
+                   inventory, dialogueProvider, spritePath, visualScale,
+                   spriteInfo, hitboxRadius, collisionRadius)
         {
             if (grid == null) throw new ArgumentNullException(nameof(grid));
 
             States = new Dictionary<CharacterState, State<CharacterState, GameEvent>>();
             foreach (CharacterState s in Enum.GetValues(typeof(CharacterState)))
                 States[s] = new State<CharacterState, GameEvent>(s);
-
-            ConfigureBaseStates();
-        }
-
-        protected virtual void ConfigureBaseStates()
-        {
-            States[CharacterState.Dead].SetEnter(() => Stop());
-            States[CharacterState.Idle].SetUpdate(m => Stop());
         }
 
         public virtual void ConfigureState(
-        CharacterState state,
-        Action onEnter = null,
-        Action onExit = null,
-        Action<FSM<CharacterState, GameEvent>> update = null,
-        Action<FSM<CharacterState, GameEvent>, GameEvent> eventHandler = null) 
+            CharacterState state,
+            Action onEnter = null,
+            Action onExit = null,
+            Action<FSM<CharacterState, GameEvent>> update = null,
+            Action<FSM<CharacterState, GameEvent>, GameEvent> eventHandler = null)
         {
-            if (state == CharacterState.Dead) return;
             if (!States.TryGetValue(state, out var s)) return;
 
             if (onEnter != null) s.SetEnter(onEnter);
             if (onExit != null) s.SetExit(onExit);
             if (update != null) s.SetUpdate(update);
-            if (eventHandler != null) s.SetEventHandler(eventHandler); 
+            if (eventHandler != null) s.SetEventHandler(eventHandler);
         }
 
         public virtual void SetState(CharacterState state)
@@ -400,21 +432,31 @@ namespace GameProj
              string spritePath = "",
              double visualScale = 1.0,
              SpriteInfo? spriteInfo = null,
-             string type = "Normal")
+             string type = "Normal",
+             double hitboxRadius = 40.0,
+             double collisionRadius = 20.0)
         : base(grid, position, id, speed, health: health, strength: strength,
-               spritePath: spritePath, visualScale: visualScale, spriteInfo: spriteInfo)
+               spritePath: spritePath, visualScale: visualScale, spriteInfo: spriteInfo,
+               hitboxRadius: hitboxRadius, collisionRadius: collisionRadius)
         {
             _type = type;
             ConfigureEnemyStates();
             InitializeBrain(CharacterState.Idle);
 
-            States[CharacterState.Idle].SetEventHandler((m, e) => {
+            States[CharacterState.Idle].SetEventHandler((m, e) =>
+            {
                 if (e is InteractionEvent ie)
                 {
                     _target = ie.Other;
                     SetState(CharacterState.Chase);
                 }
             });
+        }
+
+        public override void Die()
+        {
+            base.Die();
+            SetState(CharacterState.Dead);
         }
 
         private void ConfigureEnemyStates()
@@ -489,9 +531,11 @@ namespace GameProj
                     double speed = Character.DefaultSpeed, float health = 15f,
                     float strength = 10f, double visualScale = 1.0,
                     Inventory inventory = null, IDialogueProvider dialogueProvider = null,
-                    string spritePath = "", SpriteInfo? spriteInfo = null)
+                    string spritePath = "", SpriteInfo? spriteInfo = null,
+                    double hitboxRadius = 40.0, double collisionRadius = 20.0)
             : base(grid, startPosition, id, speed, health, strength,
-                   inventory, dialogueProvider, spritePath, visualScale, spriteInfo)
+                   inventory, dialogueProvider, spritePath, visualScale, spriteInfo,
+                   hitboxRadius, collisionRadius)
         {
             _decisionState = States[CharacterState.Decision];
             _decisionState.SetUpdate(DecisionUpdate);
@@ -499,10 +543,10 @@ namespace GameProj
         }
 
         public override void ConfigureState(CharacterState state,
-                                     Action onEnter = null,
-                                     Action onExit = null,
-                                     Action<FSM<CharacterState, GameEvent>> update = null,
-                                     Action<FSM<CharacterState, GameEvent>, GameEvent> eventHandler = null)
+                                         Action onEnter = null,
+                                         Action onExit = null,
+                                         Action<FSM<CharacterState, GameEvent>> update = null,
+                                         Action<FSM<CharacterState, GameEvent>, GameEvent> eventHandler = null)
         {
             if (state == CharacterState.Dead || state == CharacterState.Decision) return;
             base.ConfigureState(state, onEnter, onExit, update, eventHandler);
@@ -575,4 +619,6 @@ namespace GameProj
             CurrentTarget = position;
         }
     }
+
+
 }

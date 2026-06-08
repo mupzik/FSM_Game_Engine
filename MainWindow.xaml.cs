@@ -31,8 +31,6 @@ namespace GameProj
         {
 
             InitializeComponent();
-            //Устанавливаем фокус на первую кнопку
-            BtnStart.Focus();
 
             // Подключаем вывод Debug-сообщений в консоль
             Debug.Listeners.Add(new ConsoleTraceListener());

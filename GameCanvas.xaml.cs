@@ -10,7 +10,6 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using System.Xml;
 using Path = System.IO.Path;
 
 namespace GameProj
@@ -36,7 +35,6 @@ namespace GameProj
         public Dictionary<string, int> RewardsItems { get; private set; }
         public float RewardStrength { get; private set; }
 
-        // Для квестов на убийство
         public string RequiredEnemyType { get; private set; }
         public bool RequiresEnemyKill { get; private set; }
         public bool EnemyDefeated { get; set; } = false;
@@ -110,14 +108,9 @@ namespace GameProj
 
         public bool IsComplete(Inventory inventory)
         {
-            if (RequiresEnemyKill)
-                return false;
-
+            if (RequiresEnemyKill) return false;
             foreach (var required in RequiredItems)
-            {
-                if (inventory.GetTotalQuantity(required.Key) < required.Value)
-                    return false;
-            }
+                if (inventory.GetTotalQuantity(required.Key) < required.Value) return false;
             return true;
         }
 
@@ -125,21 +118,14 @@ namespace GameProj
         {
             switch (Status)
             {
-                case QuestStatus.NotStarted:
-                    return StartDialogue;
+                case QuestStatus.NotStarted: return StartDialogue;
                 case QuestStatus.Active:
-                    if (RequiresEnemyKill && EnemyDefeated)
-                        return "Ты победил Горгону? Невероятно! Вот твоя награда!";
-                    if (RequiresEnemyKill)
-                        return "Горгона всё ещё там... Будь осторожен!";
-                    if (IsComplete(inventory))
-                        return CompletionDialogue;
-                    else
-                        return "Ты еще не собрал все предметы. Приходи, когда соберешь.";
-                case QuestStatus.Completed:
-                    return AlreadyCompletedDialogue;
-                default:
-                    return Description;
+                    if (RequiresEnemyKill && EnemyDefeated) return "Ты победил Горгону? Невероятно! Вот твоя награда!";
+                    if (RequiresEnemyKill) return "Горгона всё ещё там... Будь осторожен!";
+                    if (IsComplete(inventory)) return CompletionDialogue;
+                    else return "Ты еще не собрал все предметы. Приходи, когда соберешь.";
+                case QuestStatus.Completed: return AlreadyCompletedDialogue;
+                default: return Description;
             }
         }
 
@@ -148,35 +134,21 @@ namespace GameProj
             Status = QuestStatus.NotStarted;
             EnemyDefeated = false;
         }
+
+        public override string ToString()
+        {
+            return Name;
+        }
     }
 
     public enum State_
     {
-        Tutorial,
-        Game,
-        End,
-        DeadEnding,
-        GoodEnding,
-        BadEnding,
-        NeutralEnding
+        Tutorial, Game, End, DeadEnding, GoodEnding, BadEnding, SecretEnding
     }
 
     public enum Event_
     {
-        TutorialCompleted,
-        PlayerDead,
-        GoodEndingCompleted,
-        BadEndingCompleted,
-        NeutralEndingCompleted,
-        GorgonDefeated
-    }
-
-    // Класс-обертка для предметов инвентаря
-    public class ItemWrapper
-    {
-        public Item Item { get; set; }
-        public string DisplayText => Item?.ToString() ?? "";
-        public bool IsSelected { get; set; }
+        TutorialCompleted, PlayerDead, GoodEndingCompleted, BadEndingCompleted, SecretEndingCompleted, GorgonDefeated
     }
 
     public partial class GameCanvas : UserControl
@@ -185,14 +157,15 @@ namespace GameProj
 
         private const int SLIME_GOAL = 5;
         private const double ATTACK_COOLDOWN_TIME = 0.4;
-        private const int MAX_ENEMIES = 10;
+        private const int MAX_ENEMIES = 30;
+        private int _currentBeeCount = 0;
+        private const int MAX_BEES = 10;
         private const double MIN_ZOOM = 1;
         private const double MAX_ZOOM = 2.0;
         private const double ZOOM_STEP = 0.1;
         private const int MAP_WIDTH = 100;
         private const int MAP_HEIGHT = 100;
         private const double PLAYER_SPEED = 4.0;
-        private const int GORGON_ANNOYANCE_THRESHOLD = 3;
         private Queue<string> _dialogueQueue = new Queue<string>();
 
         private GameManager _gameManager;
@@ -204,17 +177,19 @@ namespace GameProj
         private Dictionary<string, Quest> _availableQuests;
         private Quest _gorgonKillQuest;
 
-        // Инвентарь
-        private List<ItemWrapper> _inventoryItems = new List<ItemWrapper>();
+        private List<Item> _inventoryItems = new List<Item>();
         private int _selectedInventoryIndex = 0;
+
+        // Поля для журнала квестов
+        private bool _isQuestLogOpen = false;
+        private List<Quest> _activeQuests = new List<Quest>();
+        private int _selectedQuestIndex = 0;
 
         private double _attackCooldown = 0.4;
         private Random _rng = new Random();
 
         private int _gorgonInteractionCount = 0;
-        private bool _gorgonHasGivenItems = false;
         private double _gorgonLastDirection = 1;
-
         private bool _gorgonDefeated = false;
 
         private TranslateTransform _cameraTransform;
@@ -223,16 +198,15 @@ namespace GameProj
         private double _currentZoom = 1.0;
         private double _shakeIntensity = 0;
 
-
         private string _tilesPath, _spritesPath, _itemsPath, _mapsPath, _soundsPath, _musicPath, _uiPath;
         private Dictionary<string, Item> _itemPrefabs;
+        private Dictionary<string, ImageSource> _iconCache = new Dictionary<string, ImageSource>();
 
         private DispatcherTimer _gameTimer;
         private DispatcherTimer _spawnTimer;
-
         private bool _tutorialCompleted = false;
 
-        public bool IsUIOpen => (InventoryPanel.Visibility == Visibility.Visible || DialogueBox.Visibility == Visibility.Visible);
+        public bool IsUIOpen => InventoryPanel.Visibility == Visibility.Visible || DialogueBox.Visibility == Visibility.Visible;
 
         public GameCanvas()
         {
@@ -246,12 +220,14 @@ namespace GameProj
             InitializePaths();
             InitializeItemPrefabs();
             InitializeCamera();
-            this.SizeChanged += OnSizeChanged;
-            this.PreviewMouseWheel += OnMouseWheel;
+            SizeChanged += OnSizeChanged;
+            PreviewMouseWheel += OnMouseWheel;
 
-            InitializeGame();
-
-            Focus();
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                InitializeGame();
+                Focus();
+            }), DispatcherPriority.Background);
         }
 
         private void InitializePaths()
@@ -273,23 +249,21 @@ namespace GameProj
         {
             _itemPrefabs = new Dictionary<string, Item>
             {
-                { "slime_goo", new Item("slime_goo", "Слизь", "Холодная и липкая.", $"Items/slime_goo.png", true, 1) },
-                { "sword", new Item("sword", "Меч Силы", "Больше похож на кухонный нож, но все равно бьет больно.", $"Items/sword.png", false, 1) },
-                { "health_potion", new Item("health_potion", "Зелье здоровья", "Восстанавливает 50 HP.", $"Items/health_potion.png", true, 1) },
-                { "axe", new Item("axe", "Топор", "Я не умею пользоваться им по назначению.", $"Items/axe.png", false, 1) },
-                { "belt", new Item("belt", "Пояс", "Издалека похож на знак \"Стоп\".", $"Items/belt.png", false, 1) },
-                { "black_bottle", new Item("black_bottle", "Черная жижа", "Фу, гадость.", $"Items/black_bottle.png", true, 1) },
-                { "necklace", new Item("necklace", "Ожерелье", "Симпатичное.", $"Items/necklace.png", false, 1) },
-                { "note", new Item("note", "Записка", "Я читать не умею вообще-то.", $"Items/necklace.png", false, 1) },
-                { "cheese", new Item("cheese", "Сыр", "Немного дор-блю. Не то чтобы по вкусу вкусно, но по сути вкусно.", $"Items/cheese.png", false, 1) },
-                { "rock", new Item("rock", "Камень", "Камень.", $"Items/rock.png", false, 1) },
-                { "silver_thing", new Item("silver_thing", "Серая штука", "Блестит.", $"Items/silver_thing.png", false, 1) },
-                { "yellow_thing", new Item("yellow_thing", "Желтая штука", "Ого как блестит.", $"Items/yellow_thing.png", false, 1) },
-                { "spoon", new Item("spoon", "Ложка", "Деревянная.", $"Items/spoon.png", true, 1) },
-                { "sword_part", new Item("sword_part", "Ручка от меча", "Ну и куда её?", $"Items/sword_part.png", false, 1) },
-                { "tail", new Item("tail", "Чей-то хвост", "Бедная корова?", $"Items/tail.png", false, 1) },
-                { "web", new Item("web", "Паутина", "Здесь же пауков нет...", $"Items/web.png", true, 1) },
-                { "honey", new Item("honey", "Мёд", "Сладкий и липкий.", $"Items/honey.png", true, 1) },
+                { "slime_goo", new Item("slime_goo", "Слизь", "Холодная и липкая.", "Items/slime_goo.png", true, 1) },
+                { "sword", new Item("sword", "Меч Силы", "Больше похож на кухонный нож, но все равно бьет больно.", "Items/sword.png", false, 1) },
+                { "health_potion", new Item("health_potion", "Зелье здоровья", "Восстанавливает 50 HP.", "Items/health_potion.png", true, 1) },
+                { "belt", new Item("belt", "Пояс", "Издалека похож на знак \"Стоп\".", "Items/belt.png", false, 1) },
+                { "black_bottle", new Item("black_bottle", "Черная жижа", "Фу, гадость.", "Items/black_bottle.png", true, 1) },
+                { "necklace", new Item("necklace", "Ожерелье", "Симпатичное.", "Items/necklace.png", false, 1) },
+                { "note", new Item("note", "Записка", "Я читать не умею вообще-то.", "Items/necklace.png", false, 1) },
+                { "cheese", new Item("cheese", "Сыр", "Немного дор-блю.", "Items/cheese.png", false, 1) },
+                { "rock", new Item("rock", "Камень", "Камень.", "Items/rock.png", false, 1) },
+                { "silver_thing", new Item("silver_thing", "Серебряная сфера", "Блестит.", "Items/silver_thing.png", false, 1) },
+                { "yellow_thing", new Item("yellow_thing", "Золотистая сфера", "Ого как блестит.", "Items/yellow_thing.png", false, 1) },
+                { "sword_part", new Item("sword_part", "Ручка от меча", "Ну и куда её?", "Items/sword_part.png", false, 1) },
+                { "tail", new Item("tail", "Чей-то хвост", "Бедная корова?", "Items/tail.png", false, 1) },
+                { "web", new Item("web", "Паутина", "Здесь же пауков нет...", "Items/web.png", true, 1) },
+                { "honey", new Item("honey", "Мёд", "Сладкий и липкий.", "Items/honey.png", true, 1) },
             };
         }
 
@@ -307,15 +281,17 @@ namespace GameProj
         {
             _availableQuests = new Dictionary<string, Quest>();
             _gorgonInteractionCount = 0;
-            _gorgonHasGivenItems = false;
             _gorgonDefeated = false;
             _inventoryItems.Clear();
             _selectedInventoryIndex = 0;
+            _currentBeeCount = 0;
+            _dialogueQueue.Clear();
+            _activeQuests.Clear();
+            _selectedQuestIndex = 0;
+            _isQuestLogOpen = false;
 
             _gameManager = new GameManager(this, MAP_WIDTH, MAP_HEIGHT, InitializeMap);
-
             InitializeGameStates();
-
             InitializePlayer();
             InitializeQuestAlly();
             InitializeGirl();
@@ -326,7 +302,6 @@ namespace GameProj
 
             SubscribeInventoryEvents();
             StartSpawnTimer();
-            DebugCheckAnimationFiles();
 
             _gameManager.SetState(State_.Tutorial);
             StartGameLoop();
@@ -339,55 +314,26 @@ namespace GameProj
             var deadEndingState = new State<State_, Event_>(State_.DeadEnding);
             var goodEndingState = new State<State_, Event_>(State_.GoodEnding);
             var badEndingState = new State<State_, Event_>(State_.BadEnding);
-            var neutralEndingState = new State<State_, Event_>(State_.NeutralEnding);
+            var secretEndingState = new State<State_, Event_>(State_.SecretEnding);
 
-            tutorialState.SetEventHandler((machine, ev) =>
-            {
-                if (ev == Event_.TutorialCompleted)
-                    machine.SetState(gameState);
-            });
+            tutorialState.SetEventHandler((machine, ev) => { if (ev == Event_.TutorialCompleted) machine.SetState(gameState); });
 
             gameState.SetEventHandler((machine, ev) =>
             {
                 switch (ev)
                 {
-                    case Event_.PlayerDead:
-                        machine.SetState(deadEndingState);
-                        break;
-                    case Event_.GorgonDefeated:
-                        machine.SetState(goodEndingState);
-                        break;
-                    case Event_.GoodEndingCompleted:
-                        machine.SetState(goodEndingState);
-                        break;
-                    case Event_.BadEndingCompleted:
-                        machine.SetState(badEndingState);
-                        break;
-                    case Event_.NeutralEndingCompleted:
-                        machine.SetState(neutralEndingState);
-                        break;
+                    case Event_.PlayerDead: machine.SetState(deadEndingState); break;
+                    case Event_.GorgonDefeated: machine.SetState(goodEndingState); break;
+                    case Event_.GoodEndingCompleted: machine.SetState(goodEndingState); break;
+                    case Event_.BadEndingCompleted: machine.SetState(badEndingState); break;
+                    case Event_.SecretEndingCompleted: machine.SetState(secretEndingState); break;
                 }
             });
 
-            deadEndingState.SetEnter(() =>
-            {
-                Dispatcher.Invoke(() => GameOver(false, "ПЛОХАЯ КОНЦОВКА\n\nВы не смогли выполнить свою миссию...\n\nНажмите R для рестарта"));
-            });
-
-            goodEndingState.SetEnter(() =>
-            {
-                Dispatcher.Invoke(() => GameOver(true, "ХОРОШАЯ КОНЦОВКА\n\nВы спасли мир и всех жителей!\n\nНажмите R для рестарта"));
-            });
-
-            badEndingState.SetEnter(() =>
-            {
-                Dispatcher.Invoke(() => GameOver(false, "ПЛОХАЯ КОНЦОВКА\n\nВаши действия привели к катастрофе...\n\nНажмите R для рестарта"));
-            });
-
-            neutralEndingState.SetEnter(() =>
-            {
-                Dispatcher.Invoke(() => GameOver(true, "НЕЙТРАЛЬНАЯ КОНЦОВКА\n\nВы выполнили свой долг, но не более...\n\nНажмите R для рестарта"));
-            });
+            deadEndingState.SetEnter(() => Dispatcher.Invoke(() => GameOver(false, "ВЫ УМЕРЛИ!\n\nНажмите R для рестарта")));
+            goodEndingState.SetEnter(() => Dispatcher.Invoke(() => GameOver(true, "ПОБЕДА!\n\nНажмите R для рестарта")));
+            badEndingState.SetEnter(() => Dispatcher.Invoke(() => GameOver(false, "ПЛОХАЯ КОНЦОВКА\n\nНажмите R для рестарта")));
+            secretEndingState.SetEnter(() => Dispatcher.Invoke(() => GameOver(true, "СЕКРЕТНАЯ КОНЦОВКА\n\nНажмите R для рестарта")));
 
             _gameManager._tutorialState = new CompositeState<State_, Event_>(State_.Tutorial, State_.Tutorial);
             _gameManager._gameState = new CompositeState<State_, Event_>(State_.Game, State_.Game);
@@ -396,13 +342,11 @@ namespace GameProj
             endComposite.AddSubState(deadEndingState);
             endComposite.AddSubState(goodEndingState);
             endComposite.AddSubState(badEndingState);
-            endComposite.AddSubState(neutralEndingState);
-
+            endComposite.AddSubState(secretEndingState);
             _gameManager._endState = endComposite;
 
             _gameManager._tutorialState.AddSubState(tutorialState);
             _gameManager._gameState.AddSubState(gameState);
-
             _gameManager.InitializeFSM(_gameManager._tutorialState);
         }
 
@@ -410,11 +354,9 @@ namespace GameProj
         {
             _gameTimer?.Stop();
             _spawnTimer?.Stop();
-
-            GameOverText.Text = isWin ? "ПОБЕДА!\n\nНажмите R для рестарта" : "ВЫ УМЕРЛИ!\n\nНажмите R для рестарта";
+            GameOverText.Text = message;
             GameOverText.Foreground = isWin ? Brushes.Gold : Brushes.White;
             GameOverBox.Visibility = Visibility.Visible;
-
             _gameManager?.StopMusic();
         }
 
@@ -425,42 +367,12 @@ namespace GameProj
             _gameTimer.Start();
         }
 
-        private void DebugCheckAnimationFiles()
-        {
-            System.Diagnostics.Debug.WriteLine("=== Checking animation files ===");
-
-            string[] characters = { "MC", "QuestGiver", "Girl", "SchoolGirl", "Woman", "Gorgon", "Slime", "Orc", "Bee" };
-            string[] animations = { "_Idle.png", "_R_Walk.png", "_D_Walk.png", "_U_Walk.png", "_Attack.png" };
-
-            foreach (var character in characters)
-            {
-                bool hasAny = false;
-                foreach (var anim in animations)
-                {
-                    string filePath = Path.Combine(_spritesPath, character + anim);
-                    if (File.Exists(filePath))
-                    {
-                        System.Diagnostics.Debug.WriteLine($"  ✓ Found: {character}{anim}");
-                        hasAny = true;
-                    }
-                }
-                if (!hasAny)
-                {
-                    System.Diagnostics.Debug.WriteLine($"  ✗ MISSING: No animation files for {character}");
-                }
-            }
-
-            System.Diagnostics.Debug.WriteLine("=== End of check ===");
-        }
-
         private void InitializePlayer()
         {
             string mcSpritePath = Path.Combine(_spritesPath, "MC.png");
-            _player = new Player(new Vector2D(48 * 32, 48 * 32), "Player", health: 100, speed: PLAYER_SPEED,
-                spritePath: mcSpritePath, visualScale: 1.0,
-                spriteInfo: new SpriteInfo("MC", 48, 48));
+            _player = new Player(new Vector2D(48 * 32, 48 * 32), "Player", 100, PLAYER_SPEED,
+                spritePath: mcSpritePath, visualScale: 1.0, spriteInfo: new SpriteInfo("MC", 48, 48));
             _player.Strength = 15f;
-            _player.Inventory.AddItem(_itemPrefabs["slime_goo"], 7);
             _gameManager.AddCharacter(_player);
         }
 
@@ -468,24 +380,21 @@ namespace GameProj
         {
             string allySpritePath = Path.Combine(_spritesPath, "MC.png");
             _questAlly = new NPC(_gameManager.Grid, new Vector2D(46 * 32, 48 * 32), "MC",
-                speed: 0, health: 100f, strength: 0f,
-                spritePath: allySpritePath, visualScale: 1.0,
-                spriteInfo: new SpriteInfo("MC", 48, 48));
+                0, 100f, 0f, spritePath: allySpritePath, visualScale: 1.0, spriteInfo: new SpriteInfo("MC", 48, 48));
             _questAlly.SetState(CharacterState.Idle);
             _gameManager.AddCharacter(_questAlly);
 
             var slimeQuest = new Quest("slime_quest", "Сбор слизи", "Принеси 5 бутылочек со слизью")
-                .SetDialogues(
-                    "Привет! Мне нужна помощь! Надо победить пять слизней, чтобы слизь с них получить, а я не могу!",
+                .SetDialogues("Привет! Мне нужна помощь! Надо победить пять слизней, чтобы слизь с них получить, а я не могу!",
                     "Ухты, разобрался, как сражаться? А у меня не получилось :( Держи мой меч, тебе нужнее будет",
-                    "На северо-запад пойдешь - деревню найдешь!"
-                )
-                .AddRequiredItem("slime_goo", SLIME_GOAL)
-                .AddRewardItem("sword", 1)
-                .SetRewardStrength(15);
+                    "На северо-запад пойдешь - деревню найдешь!")
+                .AddRequiredItem("slime_goo", SLIME_GOAL).AddRewardItem("sword", 1).SetRewardStrength(15);
 
-            slimeQuest.OnQuestStarted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест начат: {q.Name}"); };
-            slimeQuest.OnQuestCompleted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест завершен: {q.Name}"); };
+            slimeQuest.OnQuestCompleted += (q) =>
+            {
+                _player.MaxHealth += 20;
+                _player.Heal(20);
+            };
 
             _availableQuests.Add("slime_quest", slimeQuest);
         }
@@ -493,54 +402,205 @@ namespace GameProj
         private void InitializeGirl()
         {
             string girlSpritePath = Path.Combine(_spritesPath, "Girl.png");
-            _girl = new NPC(_gameManager.Grid, new Vector2D(18 * 32, 4
-                * 32), "Girl",
-                speed: 0, health: 100f, strength: 0f,
-                spritePath: girlSpritePath, visualScale: 1.0,
-                spriteInfo: new SpriteInfo("Girl", 48, 48));
+            _girl = new NPC(_gameManager.Grid, new Vector2D(18 * 32, 4 * 32), "Girl",
+                0, 100f, 0f, spritePath: girlSpritePath, visualScale: 1.0, spriteInfo: new SpriteInfo("Girl", 48, 48));
             _girl.SetState(CharacterState.Idle);
             _gameManager.AddCharacter(_girl);
 
-            var girlQuest = new Quest("girl_quest", "Темная просьба", "Принеси черную жижу и слизь")
+            var firstGirlQuest = new Quest("girl_quest_first", "Странная просьба", "Принеси черную жижу и 10 слизей")
                 .SetDialogues(
                     "Пожалуйста, помоги мне! Мне нужна черная жижа и 10 слизей. Я знаю, это странно, но это очень важно!",
-                    "Спасибо! Ты принес черную жижу и 10 слизей. Ты спас меня! Вот твоя награда - Ожерелье.",
+                    "Спасибо! Ты принес черную жижу и 10 слизей. Вот, держи ожерелье, его кто-то, наверное, потерял. Но есть еще одна просьба...",
                     "Спасибо за помощь! Теперь я в безопасности."
                 )
                 .AddRequiredItem("black_bottle", 1)
                 .AddRequiredItem("slime_goo", 10)
                 .AddRewardItem("necklace", 1)
-                .SetRewardStrength(10);
+                .SetRewardStrength(50);
 
-            girlQuest.OnQuestStarted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест начат: {q.Name}"); };
-            girlQuest.OnQuestCompleted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест завершен: {q.Name}"); };
+            var secondGirlQuest = new Quest("girl_quest_second", "Магическая желтая сфера", "Принеси магическую сферу")
+                .SetDialogues(
+                    "Спасибо еще раз! Принеси магическую сферу, если найдешь. Говорят, они где-то в этом лесу...",
+                    "Ура! Это именно то, что мне нужно! Спасибо! О нет... Кажется, я разбудила древнее зло! Берегись!",
+                    "Спасибо, что помог мне с магической сферой!"
+                )
+                .AddRequiredItem("yellow_thing", 1)
+                .AddRewardItem("cheese", 3)
+                .SetRewardStrength(15);
 
-            _availableQuests.Add("girl_quest", girlQuest);
+            secondGirlQuest.OnQuestStarted += (q) =>
+            {
+                q.RequiredItems.Clear();
+            };
+
+            firstGirlQuest.OnQuestCompleted += (q) =>
+            {
+                System.Diagnostics.Debug.WriteLine("First quest completed, adding second quest...");
+                if (!_availableQuests.ContainsKey("girl_quest_second"))
+                {
+                    _availableQuests.Add("girl_quest_second", secondGirlQuest);
+                    System.Diagnostics.Debug.WriteLine("Second quest added to dictionary");
+                }
+                if (_isQuestLogOpen) RefreshQuestLog();
+            };
+
+            secondGirlQuest.OnQuestCompleted += (q) =>
+            {
+                System.Diagnostics.Debug.WriteLine("Second quest completed! Spawning giant slime...");
+
+                bool hasYellowSphere = false;
+                bool hasSilverSphere = false;
+
+                foreach (var required in q.RequiredItems)
+                {
+                    if (required.Key == "yellow_thing" && _player.Inventory.GetTotalQuantity("yellow_thing") >= required.Value)
+                        hasYellowSphere = true;
+                    if (required.Key == "silver_thing" && _player.Inventory.GetTotalQuantity("silver_thing") >= required.Value)
+                        hasSilverSphere = true;
+                }
+
+                if (hasYellowSphere)
+                    _player.Inventory.RemoveItem("yellow_thing", 1);
+                else if (hasSilverSphere)
+                    _player.Inventory.RemoveItem("silver_thing", 1);
+
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                timer.Tick += (s, args) =>
+                {
+                    timer.Stop();
+                    SpawnGiantDarkSlime(hasYellowSphere, hasSilverSphere);
+                };
+                timer.Start();
+            };
+
+            _availableQuests.Add("girl_quest_first", firstGirlQuest);
+        }
+
+        private void SpawnGiantDarkSlime(bool hasYellowSphere, bool hasSilverSphere)
+        {
+            Vector2D spawnPos = new Vector2D(20 * 32 + 16, 10 * 32 + 16);
+
+            string giantSlimeSpritePath = Path.Combine(_spritesPath, "DarkSlime.png");
+            if (!File.Exists(giantSlimeSpritePath))
+            {
+                giantSlimeSpritePath = Path.Combine(_spritesPath, "Slime.png");
+            }
+
+            float slimeHealth = 500f;
+            float slimeStrength = 150f;
+
+            if (hasSilverSphere)
+            {
+                slimeHealth = 300f;
+                slimeStrength = 80f;
+            }
+            else if (hasYellowSphere)
+            {
+                slimeHealth = 700f;
+                slimeStrength = 200f;
+            }
+
+            Enemy giantDarkSlime = new Enemy(_gameManager.Grid, spawnPos, 1.2,
+                "GiantDarkSlime", slimeHealth, slimeStrength, giantSlimeSpritePath, 5.0,
+                new SpriteInfo("DarkSlime", 48, 48), "GiantDarkSlime",
+                hitboxRadius: 100.0,
+                collisionRadius: 30.0);
+
+            SetupGiantDarkSlimeBehavior(giantDarkSlime);
+            _gameManager.AddCharacter(giantDarkSlime);
+
+            _gameManager.PlaySound("attack.mp3", 1.0f);
+            TriggerShake(10.0);
+        }
+
+        private void SetupGiantDarkSlimeBehavior(Enemy giantSlime)
+        {
+            if (giantSlime.Type != "GiantDarkSlime") return;
+
+            double lastAttackTime = 0;
+            const double ATTACK_COOLDOWN = 5.0;
+
+            giantSlime.ConfigureState(CharacterState.Dead, onEnter: () =>
+            {
+                giantSlime.Stop();
+                _gameManager.SendEvent(Event_.SecretEndingCompleted);
+                DropItem("black_bottle", giantSlime.Position);
+                DropItem("slime_goo", giantSlime.Position);
+                DropItem("yellow_thing", giantSlime.Position);
+                DropItem("cheese", giantSlime.Position);
+                _gameManager.RemoveCharacter(giantSlime);
+            });
+
+            giantSlime.ConfigureState(CharacterState.Idle, update: (machine) =>
+            {
+                if (!giantSlime.IsAlive) { giantSlime.SetState(CharacterState.Dead); return; }
+                giantSlime.Stop();
+                if (_player != null && _player.IsAlive && Vector2D.Distance(giantSlime.Position, _player.Position) < 400.0)
+                {
+                    giantSlime.SetState(CharacterState.Chase);
+                }
+            });
+
+            giantSlime.ConfigureState(CharacterState.Chase, update: (machine) =>
+            {
+                if (!giantSlime.IsAlive) { giantSlime.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { giantSlime.SetState(CharacterState.Idle); return; }
+
+                double dist = Vector2D.Distance(giantSlime.Position, _player.Position);
+                if (dist < 100.0)
+                {
+                    giantSlime.SetState(CharacterState.Attack);
+                }
+                else
+                {
+                    Vector2D direction = (_player.Position - giantSlime.Position).Normalize();
+                    giantSlime.Move(direction);
+                }
+            });
+
+            giantSlime.ConfigureState(CharacterState.Attack,
+                onEnter: () => { giantSlime.Stop(); },
+                update: (machine) =>
+                {
+                    if (!giantSlime.IsAlive) { giantSlime.SetState(CharacterState.Dead); return; }
+                    if (_player == null || !_player.IsAlive) { giantSlime.SetState(CharacterState.Idle); return; }
+
+                    double dist = Vector2D.Distance(giantSlime.Position, _player.Position);
+                    if (dist > 150.0) { giantSlime.SetState(CharacterState.Chase); return; }
+
+                    double currentTime = DateTime.Now.TimeOfDay.TotalSeconds;
+                    if (currentTime - lastAttackTime >= ATTACK_COOLDOWN)
+                    {
+                        lastAttackTime = currentTime;
+                        giantSlime.Attack(_player);
+                        TriggerShake(15.0);
+                        ShowFloatingDamageNumber(_player.Position, 150f, false);
+                        _gameManager.PlaySound("attack.mp3", 1.0f);
+
+                        if (!_player.IsAlive)
+                        {
+                            _gameManager.SendEvent(Event_.BadEndingCompleted);
+                        }
+                    }
+                    giantSlime.SetState(CharacterState.Chase);
+                });
+
+            giantSlime.SetState(CharacterState.Idle);
         }
 
         private void InitializeSchoolGirl()
         {
             string schoolGirlSpritePath = Path.Combine(_spritesPath, "SchoolGirl.png");
             _schoolGirl = new NPC(_gameManager.Grid, new Vector2D(30 * 32, 35 * 32), "SchoolGirl",
-                speed: 0, health: 100f, strength: 0f,
-                spritePath: schoolGirlSpritePath, visualScale: 0.8,
-                spriteInfo: new SpriteInfo("SchoolGirl", 128, 128));
+                0, 100f, 0f, spritePath: schoolGirlSpritePath, visualScale: 0.8, spriteInfo: new SpriteInfo("SchoolGirl", 128, 128));
             _schoolGirl.SetState(CharacterState.Idle);
             _gameManager.AddCharacter(_schoolGirl);
 
             var schoolGirlQuest = new Quest("schoolgirl_quest", "Потерянное ожерелье", "Найди ожерелье")
-                .SetDialogues(
-                    "Привет! Я потеряла свое любимое ожерелье. Ты не мог бы его найти для меня?",
-                    "Ура! Ты нашел мое ожерелье! Спасибо большое! Держи этот серебряный предмет в качестве награды.",
-                    "Спасибо, что нашел мое ожерелье! Я так рада!"
-                )
-                .AddRequiredItem("necklace", 1)
-                .AddRewardItem("silver_thing", 1)
-                .SetRewardStrength(5);
-
-            schoolGirlQuest.OnQuestStarted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест начат: {q.Name}"); };
-            schoolGirlQuest.OnQuestCompleted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест завершен: {q.Name}"); };
-
+                .SetDialogues("Привет! Я потеряла свое любимое ожерелье. Ты не мог бы его найти для меня?",
+                    "Ура! Ты нашел мое ожерелье! Спасибо большое! Держи 5 зелий лечения в качестве награды.",
+                    "Спасибо, что нашел мое ожерелье! Я так рада!")
+                .AddRequiredItem("necklace", 1).AddRewardItem("health_potion", 5).SetRewardStrength(0);
             _availableQuests.Add("schoolgirl_quest", schoolGirlQuest);
         }
 
@@ -548,24 +608,21 @@ namespace GameProj
         {
             string womanSpritePath = Path.Combine(_spritesPath, "Woman.png");
             _woman = new NPC(_gameManager.Grid, new Vector2D(70 * 32, 65 * 32), "Woman",
-                speed: 0, health: 100f, strength: 0f,
-                spritePath: womanSpritePath, visualScale: 1.0,
-                spriteInfo: new SpriteInfo("Woman", 48, 48));
+                0, 100f, 0f, spritePath: womanSpritePath, visualScale: 1.0, spriteInfo: new SpriteInfo("Woman", 48, 48));
             _woman.SetState(CharacterState.Idle);
             _gameManager.AddCharacter(_woman);
 
-            var womanQuest = new Quest("woman_quest", "Нужен пояс", "Принеси пояс для платья")
-                .SetDialogues(
-                    "Здравствуйте! У меня проблема - порвался пояс на платье. Не могли бы вы найти мне новый пояс?",
-                    "О, какой красивый пояс! Спасибо вам огромное! Возьмите эту желтую штуку в благодарность.",
-                    "Спасибо за пояс! Теперь мое платье снова в порядке."
-                )
-                .AddRequiredItem("belt", 1)
-                .AddRewardItem("yellow_thing", 1)
-                .SetRewardStrength(8);
+            var womanQuest = new Quest("woman_quest", "Нужен пояс", "Найди пояс для платья")
+                .SetDialogues("Здравствуйте! У меня проблема - порвался пояс на платье. Я потеряла его где-то в этом лесу. Не могли бы вы найти его для меня?",
+                    "О, какой красивый пояс! Спасибо вам огромное! Я чувствую себя намного лучше!",
+                    "Спасибо за пояс! Теперь мое платье снова в порядке.")
+                .AddRequiredItem("belt", 1).SetRewardStrength(0);
 
-            womanQuest.OnQuestStarted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест начат: {q.Name}"); };
-            womanQuest.OnQuestCompleted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест завершен: {q.Name}"); };
+            womanQuest.OnQuestCompleted += (q) =>
+            {
+                _player.MaxHealth += 100;
+                _player.Heal(100);
+            };
 
             _availableQuests.Add("woman_quest", womanQuest);
         }
@@ -576,38 +633,38 @@ namespace GameProj
             _gorgon = new Enemy(
                 grid: _gameManager.Grid,
                 position: new Vector2D(82 * 32, 79 * 32),
-                speed: 0,
+                speed: 2,
                 id: "Gorgon",
                 health: 100f,
-                strength: 0f,
+                strength: 20f,
                 spritePath: GorgonSpritePath,
                 visualScale: 1.0,
                 spriteInfo: new SpriteInfo("Gorgon", 128, 128),
                 type: "Gorgon");
-            _gorgon.SetState(CharacterState.Idle);
+
+            SetupGorgonBehavior(_gorgon);
             _gameManager.AddCharacter(_gorgon);
+
+            var gorgonNecklaceQuest = new Quest("gorgon_necklace_quest", "Ожерелье для горгоны", "Отдай горгоне ожерелье")
+                .SetDialogues("Ты пришел ко мне? У тебя есть ожерелье? Отдай его мне...",
+                    "Спасибо за ожерелье... Оно было моим когда-то давно. Возьми эту серебряную сферу в благодарность.",
+                    "Спасибо за ожерелье... Теперь я спокойна.")
+                .AddRequiredItem("necklace", 1).AddRewardItem("silver_thing", 1).SetRewardStrength(0);
+
+            _availableQuests.Add("gorgon_necklace_quest", gorgonNecklaceQuest);
         }
 
         private void InitializeFinn()
         {
             string finnSpritePath = Path.Combine(_spritesPath, "Orc.png");
             _finn = new NSM_NPC(_gameManager.Grid, new Vector2D(25 * 32, 25 * 32), "Finn",
-                speed: 2.5, health: 60f, strength: 8f,
-                visualScale: 1.0, spritePath: finnSpritePath,
-                spriteInfo: new SpriteInfo("Orc", 48, 48));
+                2.5, 60f, 8f, 1.0, spritePath: finnSpritePath, spriteInfo: new SpriteInfo("Orc", 48, 48));
 
             _gorgonKillQuest = new Quest("gorgon_kill_quest", "Убийство Горгоны", "Победи древнее чудовище - Горгону")
-                .SetDialogues(
-                    "Ты в юго-восточный лес не ходи, там опасно - Горгона живет.",
+                .SetDialogues("Ты в юго-восточный лес не ходи, там опасно - Горгона живет.",
                     "Невероятно! Ты действительно победил Горгону!",
-                    "Спасибо, что избавил нас от Горгоны! Теперь мы можем жить в безопасности."
-                )
-                .SetRequiredEnemyKill("Gorgon")
-                .AddRewardItem("sword", 1)
-                .SetRewardStrength(30);
-
-            _gorgonKillQuest.OnQuestStarted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест начат: {q.Name}"); };
-            _gorgonKillQuest.OnQuestCompleted += (q) => { System.Diagnostics.Debug.WriteLine($"Квест завершен: {q.Name}"); };
+                    "Спасибо, что избавил нас от Горгоны! Теперь мы можем жить в безопасности.")
+                .SetRequiredEnemyKill("Gorgon").SetRewardStrength(0);
 
             _availableQuests.Add("gorgon_kill_quest", _gorgonKillQuest);
 
@@ -616,199 +673,233 @@ namespace GameProj
             _gameManager.AddCharacter(_finn);
         }
 
-        private void SpawnBee(Vector2D spawnPos)
+        private void SetupSlimeBehavior(Enemy slime)
         {
-            string beeSpritePath = Path.Combine(_spritesPath, "Bee.png");
-            Enemy bee = new Enemy(_gameManager.Grid, spawnPos, speed: 2.8,
-                id: $"Bee_{DateTime.Now.Ticks}",
-                health: 20f,
-                strength: 6f,
-                spritePath: beeSpritePath,
-                visualScale: 0.8,
-                spriteInfo: new SpriteInfo("Bee", 48, 48),
-                type: "Bee");
+            if (slime.Type != "Slime") return;
 
-            SetupBeeBehavior(bee);
-            _gameManager.AddCharacter(bee);
+            slime.ConfigureState(CharacterState.Dead, onEnter: () =>
+            {
+                slime.Stop();
+                DropItem("slime_goo", slime.Position);
+                _gameManager.RemoveCharacter(slime);
+            });
+
+            slime.ConfigureState(CharacterState.Idle, update: (machine) =>
+            {
+                if (!slime.IsAlive) { slime.SetState(CharacterState.Dead); return; }
+                slime.Stop();
+                if (_player != null && _player.IsAlive && Vector2D.Distance(slime.Position, _player.Position) < 150.0)
+                    slime.SetState(CharacterState.Chase);
+            });
+
+            slime.ConfigureState(CharacterState.Chase, update: (machine) =>
+            {
+                if (!slime.IsAlive) { slime.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { slime.SetState(CharacterState.Idle); return; }
+                double dist = Vector2D.Distance(slime.Position, _player.Position);
+                if (dist < 40.0) slime.SetState(CharacterState.Attack);
+                else slime.Move((_player.Position - slime.Position).Normalize());
+            });
+
+            slime.ConfigureState(CharacterState.Attack, update: (machine) =>
+            {
+                if (!slime.IsAlive) { slime.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { slime.SetState(CharacterState.Idle); return; }
+                slime.Stop();
+                double dist = Vector2D.Distance(slime.Position, _player.Position);
+                if (dist > 50.0) slime.SetState(CharacterState.Chase);
+                else if (_rng.NextDouble() < 0.05)
+                {
+                    slime.Attack(_player);
+                    TriggerShake(3.0);
+                    ShowFloatingDamageNumber(_player.Position, slime.Strength, false);
+                    if (!_player.IsAlive) _gameManager.SendEvent(Event_.PlayerDead);
+                }
+            });
+
+            slime.SetState(CharacterState.Idle);
+        }
+
+        private void SetupDarkSlimeBehavior(Enemy darkSlime)
+        {
+            if (darkSlime.Type != "DarkSlime") return;
+
+            darkSlime.ConfigureState(CharacterState.Dead, onEnter: () =>
+            {
+                darkSlime.Stop();
+                DropItem("black_bottle", darkSlime.Position);
+                _gameManager.RemoveCharacter(darkSlime);
+            });
+
+            darkSlime.ConfigureState(CharacterState.Idle, update: (machine) =>
+            {
+                if (!darkSlime.IsAlive) { darkSlime.SetState(CharacterState.Dead); return; }
+                darkSlime.Stop();
+                if (_player != null && _player.IsAlive && Vector2D.Distance(darkSlime.Position, _player.Position) < 150.0)
+                    darkSlime.SetState(CharacterState.Chase);
+            });
+
+            darkSlime.ConfigureState(CharacterState.Chase, update: (machine) =>
+            {
+                if (!darkSlime.IsAlive) { darkSlime.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { darkSlime.SetState(CharacterState.Idle); return; }
+                double dist = Vector2D.Distance(darkSlime.Position, _player.Position);
+                if (dist < 40.0) darkSlime.SetState(CharacterState.Attack);
+                else darkSlime.Move((_player.Position - darkSlime.Position).Normalize());
+            });
+
+            darkSlime.ConfigureState(CharacterState.Attack, update: (machine) =>
+            {
+                if (!darkSlime.IsAlive) { darkSlime.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { darkSlime.SetState(CharacterState.Idle); return; }
+                darkSlime.Stop();
+                double dist = Vector2D.Distance(darkSlime.Position, _player.Position);
+                if (dist > 50.0) darkSlime.SetState(CharacterState.Chase);
+                else if (_rng.NextDouble() < 0.05)
+                {
+                    darkSlime.Attack(_player);
+                    TriggerShake(3.0);
+                    ShowFloatingDamageNumber(_player.Position, darkSlime.Strength, false);
+                    if (!_player.IsAlive) _gameManager.SendEvent(Event_.PlayerDead);
+                }
+            });
+
+            darkSlime.SetState(CharacterState.Idle);
         }
 
         private void SetupBeeBehavior(Enemy bee)
         {
-            if (bee.Type != "Bee")
-                return;
+            if (bee.Type != "Bee") return;
 
-            bee.ConfigureState(CharacterState.Idle,
-                update: (machine) =>
+            bee.ConfigureState(CharacterState.Dead, onEnter: () =>
+            {
+                bee.Stop();
+                DropItem("honey", bee.Position);
+                _gameManager.RemoveCharacter(bee);
+                _currentBeeCount--;
+            });
+
+            bee.ConfigureState(CharacterState.Idle, update: (machine) =>
+            {
+                if (!bee.IsAlive) { bee.SetState(CharacterState.Dead); return; }
+                if (_rng.NextDouble() < 0.02)
                 {
-                    if (_rng.NextDouble() < 0.02)
-                    {
-                        double angle = _rng.NextDouble() * Math.PI * 2;
-                        bee.Move(new Vector2D(Math.Cos(angle), Math.Sin(angle)));
-                    }
+                    double angle = _rng.NextDouble() * Math.PI * 2;
+                    bee.Move(new Vector2D(Math.Cos(angle), Math.Sin(angle)));
+                }
+                if (_player != null && _player.IsAlive && Vector2D.Distance(bee.Position, _player.Position) < 200.0)
+                    bee.SetState(CharacterState.Chase);
+            });
 
-                    if (_player != null && _player.IsAlive && Vector2D.Distance(bee.Position, _player.Position) < 200.0)
-                        bee.SetState(CharacterState.Chase);
-                });
-
-            bee.ConfigureState(CharacterState.Chase,
-                update: (machine) =>
+            bee.ConfigureState(CharacterState.Chase, update: (machine) =>
+            {
+                if (!bee.IsAlive) { bee.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { bee.SetState(CharacterState.Idle); return; }
+                double dist = Vector2D.Distance(bee.Position, _player.Position);
+                if (dist < 35.0) bee.SetState(CharacterState.Attack);
+                else
                 {
-                    if (_player == null || !_player.IsAlive)
+                    Vector2D direction = (_player.Position - bee.Position).Normalize();
+                    if (_rng.NextDouble() < 0.3)
                     {
-                        bee.SetState(CharacterState.Idle);
-                        return;
+                        direction += new Vector2D((_rng.NextDouble() - 0.5) * 0.5, (_rng.NextDouble() - 0.5) * 0.5);
+                        direction = direction.Normalize();
                     }
-                    double dist = Vector2D.Distance(bee.Position, _player.Position);
-                    if (dist < 35.0)
-                        bee.SetState(CharacterState.Attack);
-                    else
-                    {
-                        Vector2D direction = (_player.Position - bee.Position).Normalize();
-                        if (_rng.NextDouble() < 0.3)
-                        {
-                            direction += new Vector2D((_rng.NextDouble() - 0.5) * 0.5, (_rng.NextDouble() - 0.5) * 0.5);
-                            direction = direction.Normalize();
-                        }
-                        bee.Move(direction);
-                    }
-                });
+                    bee.Move(direction);
+                }
+            });
 
-            bee.ConfigureState(CharacterState.Attack,
-                update: (machine) =>
+            bee.ConfigureState(CharacterState.Attack, update: (machine) =>
+            {
+                if (!bee.IsAlive) { bee.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { bee.SetState(CharacterState.Idle); return; }
+                bee.Stop();
+                double dist = Vector2D.Distance(bee.Position, _player.Position);
+                if (dist > 45.0) bee.SetState(CharacterState.Chase);
+                else if (_rng.NextDouble() < 0.08)
                 {
-                    if (_player == null || !_player.IsAlive)
-                    {
-                        bee.SetState(CharacterState.Idle);
-                        return;
-                    }
-                    bee.Stop();
-                    double dist = Vector2D.Distance(bee.Position, _player.Position);
-                    if (dist > 45.0)
-                        bee.SetState(CharacterState.Chase);
-                    else if (_rng.NextDouble() < 0.08)
-                    {
-                        bee.Attack(_player);
-                        TriggerShake(2.0);
-                        ShowFloatingDamageNumber(_player.Position, bee.Strength, false);
-                        if (!_player.IsAlive)
-                            _gameManager.SendEvent(Event_.PlayerDead);
-                    }
-                });
+                    bee.Attack(_player);
+                    TriggerShake(2.0);
+                    ShowFloatingDamageNumber(_player.Position, bee.Strength, false);
+                    if (!_player.IsAlive) _gameManager.SendEvent(Event_.PlayerDead);
+                }
+            });
 
             bee.SetState(CharacterState.Idle);
         }
 
-        private void SpawnRandomEnemy()
+        private void SetupGorgonBehavior(Enemy gorgon)
         {
-            if (_gameManager == null) return;
-            int currentEnemies = _gameManager.Characters.Count(c => c is Enemy && c.IsAlive);
-            if (currentEnemies >= MAX_ENEMIES) return;
+            if (gorgon.Type != "Gorgon") return;
 
-            Vector2D spawnPos = GetRandomSpawnPosition();
+            double lastAttackTime = 0;
+            const double ATTACK_COOLDOWN = 1.5;
 
-            int tileX = (int)(spawnPos.X / 32);
-            int tileY = (int)(spawnPos.Y / 32);
-
-            const int HALF_MAP = 50;
-
-            bool isBottomLeft = (tileX < HALF_MAP && tileY >= HALF_MAP);
-            bool isTopRight = (tileX >= HALF_MAP && tileY < HALF_MAP);
-
-            if (isBottomLeft)
+            gorgon.ConfigureState(CharacterState.Dead, onEnter: () =>
             {
-                string slimeSpritePath = Path.Combine(_spritesPath, "Slime.png");
-                Enemy slime = new Enemy(_gameManager.Grid, spawnPos, speed: 1.5,
-                    id: $"Slime_{DateTime.Now.Ticks}",
-                    health: 30f,
-                    strength: 4f,
-                    spritePath: slimeSpritePath,
-                    visualScale: 1.0,
-                    spriteInfo: new SpriteInfo("Slime", 48, 48),
-                    type: "Slime");
-                SetupSlimeBehavior(slime);
-                _gameManager.AddCharacter(slime);
-            }
-            else if (isTopRight)
-            {
-                SpawnBee(spawnPos);
-            }
-            else
-            {
-                if (_rng.NextDouble() < 0.5)
+                gorgon.Stop();
+                var items = new Dictionary<string, int> { { "slime_goo", 15 }, { "black_bottle", 1 }, { "necklace", 1 }, { "belt", 1 }, { "cheese", 2 } };
+                foreach (var item in items)
+                    for (int i = 0; i < item.Value; i++) DropItem(item.Key, gorgon.Position);
+
+                _gorgonDefeated = true;
+
+                if (_gorgonKillQuest?.Status == QuestStatus.Active)
                 {
-                    string slimeSpritePath = Path.Combine(_spritesPath, "Slime.png");
-                    Enemy slime = new Enemy(_gameManager.Grid, spawnPos, speed: 1.5,
-                        id: $"Slime_{DateTime.Now.Ticks}",
-                        health: 30f,
-                        strength: 4f,
-                        spritePath: slimeSpritePath,
-                        visualScale: 1.0,
-                        spriteInfo: new SpriteInfo("Slime", 48, 48),
-                        type: "Slime");
-                    SetupSlimeBehavior(slime);
-                    _gameManager.AddCharacter(slime);
+                    _gorgonKillQuest.EnemyDefeated = true;
+                    if (_isQuestLogOpen) RefreshQuestLog();
                 }
-                else
+
+                _gameManager.RemoveCharacter(gorgon);
+                if (gorgon == _gorgon) _gorgon = null;
+            });
+
+            gorgon.ConfigureState(CharacterState.Idle, update: (machine) =>
+            {
+                if (!gorgon.IsAlive) { gorgon.SetState(CharacterState.Dead); return; }
+                gorgon.Stop();
+            });
+
+            gorgon.ConfigureState(CharacterState.Chase, update: (machine) =>
+            {
+                if (!gorgon.IsAlive) { gorgon.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { gorgon.SetState(CharacterState.Idle); return; }
+                double dist = Vector2D.Distance(gorgon.Position, _player.Position);
+                if (dist < 40.0) gorgon.SetState(CharacterState.Attack);
+                else gorgon.Move((_player.Position - gorgon.Position).Normalize());
+            });
+
+            gorgon.ConfigureState(CharacterState.Attack, update: (machine) =>
+            {
+                if (!gorgon.IsAlive) { gorgon.SetState(CharacterState.Dead); return; }
+                if (_player == null || !_player.IsAlive) { gorgon.SetState(CharacterState.Idle); return; }
+                double dist = Vector2D.Distance(gorgon.Position, _player.Position);
+                if (dist > 70.0) { gorgon.SetState(CharacterState.Chase); return; }
+                double currentTime = DateTime.Now.TimeOfDay.TotalSeconds;
+                if (currentTime - lastAttackTime >= ATTACK_COOLDOWN)
                 {
-                    SpawnBee(spawnPos);
+                    lastAttackTime = currentTime;
+                    gorgon.Attack(_player);
+                    TriggerShake(5.0);
+                    ShowFloatingDamageNumber(_player.Position, 20f, false);
+                    _gameManager.PlaySound("attack.mp3", 0.8f);
+                    if (!_player.IsAlive) _gameManager.SendEvent(Event_.PlayerDead);
                 }
-            }
-        }
+                gorgon.SetState(CharacterState.Chase);
+            });
 
-        private void RotateGorgonToPlayer()
-        {
-            if (_player == null || _gorgon == null) return;
-
-            Vector2D direction = _player.Position - _gorgon.Position;
-
-            if (direction.X > 0 && _gorgonLastDirection != 1)
-            {
-                _gorgonLastDirection = 1;
-                _gameManager?.FlipHorizontally(_gorgon, false);
-            }
-            else if (direction.X < 0 && _gorgonLastDirection != -1)
-            {
-                _gorgonLastDirection = -1;
-                _gameManager?.FlipHorizontally(_gorgon, true);
-            }
-        }
-
-        private void GiveAllQuestItemsFromGorgon()
-        {
-            if (_gorgonHasGivenItems) return;
-
-            var questItems = new Dictionary<string, int>
-            {
-                { "slime_goo", 15 },
-                { "black_bottle", 1 },
-                { "necklace", 1 },
-                { "belt", 1 },
-                { "cheese", 2 }
-            };
-
-            foreach (var item in questItems)
-            {
-                if (_itemPrefabs.ContainsKey(item.Key))
-                {
-                    for (int i = 0; i < item.Value; i++)
-                    {
-                        _player.Inventory.AddItem(_itemPrefabs[item.Key], 1);
-                    }
-                }
-            }
-
-            _gorgonHasGivenItems = true;
-            ShowFloatingMessage("Горгона выбросила все необходимые предметы и 2 куска сыра!", 3.0);
-            _gameManager.PlaySound("item.mp3", 0.8f);
-            TriggerShake(5.0);
+            gorgon.SetState(CharacterState.Idle);
         }
 
         private void ConfigureFinnStates()
         {
+            _finn.ConfigureState(CharacterState.Dead, onEnter: () => { _finn.Stop(); _gameManager.RemoveCharacter(_finn); });
+
             _finn.ConfigureState(CharacterState.Idle,
                 onEnter: () => _finn.Stop(),
                 update: (machine) =>
                 {
+                    if (!_finn.IsAlive) { _finn.SetState(CharacterState.Dead); return; }
                     if (_rng.NextDouble() < 0.01)
                     {
                         double angle = _rng.NextDouble() * Math.PI * 2;
@@ -819,39 +910,32 @@ namespace GameProj
                     if (_rng.NextDouble() < 0.02) _finn.SetState(CharacterState.Decision);
                 });
 
-            _finn.ConfigureState(CharacterState.Chase,
-                update: (machine) =>
+            _finn.ConfigureState(CharacterState.Chase, update: (machine) =>
+            {
+                if (!_finn.IsAlive) { _finn.SetState(CharacterState.Dead); return; }
+                Enemy target = FindNearestEnemy(250);
+                if (target == null || !target.IsAlive) { _finn.SetState(CharacterState.Decision); return; }
+                double dist = Vector2D.Distance(_finn.Position, target.Position);
+                if (dist < 45) _finn.SetState(CharacterState.Attack);
+                else
                 {
-                    Enemy target = FindNearestEnemy(250);
-                    if (target == null || !target.IsAlive) { _finn.SetState(CharacterState.Decision); return; }
-                    double dist = Vector2D.Distance(_finn.Position, target.Position);
-                    if (dist < 45) _finn.SetState(CharacterState.Attack);
-                    else
-                    {
-                        _finn.Move((target.Position - _finn.Position).Normalize());
-                        if (_rng.NextDouble() < 0.005) _finn.SetState(CharacterState.Decision);
-                    }
-                });
+                    _finn.Move((target.Position - _finn.Position).Normalize());
+                    if (_rng.NextDouble() < 0.005) _finn.SetState(CharacterState.Decision);
+                }
+            });
 
             _finn.ConfigureState(CharacterState.Attack,
                 onEnter: () => _finn.Stop(),
                 update: (machine) =>
                 {
+                    if (!_finn.IsAlive) { _finn.SetState(CharacterState.Dead); return; }
                     Enemy target = FindNearestEnemy(60);
                     if (target != null && target.IsAlive)
                     {
                         target.TakeDamage(_finn.Strength);
                         ShowFloatingDamageNumber(target.Position, _finn.Strength, false);
-                        if (!target.IsAlive)
-                        {
-                            if (target.Type == "Slime")
-                                DropItem("slime_goo", target.Position);
-                            else if (target.Type == "Bee")
-                                DropItem("honey", target.Position);
-                        }
-                        _finn.SetState(CharacterState.Decision);
                     }
-                    else _finn.SetState(CharacterState.Decision);
+                    _finn.SetState(CharacterState.Decision);
                 });
 
             _finn.AddTransition(CharacterState.Idle, CharacterState.Chase, 0.30);
@@ -863,84 +947,87 @@ namespace GameProj
             _finn.AddTransition(CharacterState.Attack, CharacterState.Chase, 0.70);
         }
 
-        private void SetupSlimeBehavior(Enemy slime)
+        private void SpawnBee(Vector2D spawnPos)
         {
-            if (slime.Type != "Slime")
-                return;
+            if (_currentBeeCount >= MAX_BEES) return;
 
-            slime.ConfigureState(CharacterState.Idle,
-                update: (machine) =>
-                {
-                    slime.Stop();
-                    if (_player != null && _player.IsAlive && Vector2D.Distance(slime.Position, _player.Position) < 150.0)
-                        slime.SetState(CharacterState.Chase);
-                });
+            string beeSpritePath = Path.Combine(_spritesPath, "Bee.png");
+            Enemy bee = new Enemy(_gameManager.Grid, spawnPos, 2.8,
+                $"Bee_{DateTime.Now.Ticks}", 20f, 6f, beeSpritePath, 0.8,
+                new SpriteInfo("Bee", 48, 48), "Bee");
 
-            slime.ConfigureState(CharacterState.Chase,
-                update: (machine) =>
-                {
-                    if (_player == null || !_player.IsAlive)
-                    {
-                        slime.SetState(CharacterState.Idle);
-                        return;
-                    }
-                    double dist = Vector2D.Distance(slime.Position, _player.Position);
-                    if (dist < 40.0)
-                        slime.SetState(CharacterState.Attack);
-                    else
-                        slime.Move((_player.Position - slime.Position).Normalize());
-                });
-
-            slime.ConfigureState(CharacterState.Attack,
-                update: (machine) =>
-                {
-                    if (_player == null || !_player.IsAlive)
-                    {
-                        slime.SetState(CharacterState.Idle);
-                        return;
-                    }
-                    slime.Stop();
-                    double dist = Vector2D.Distance(slime.Position, _player.Position);
-                    if (dist > 50.0)
-                        slime.SetState(CharacterState.Chase);
-                    else if (_rng.NextDouble() < 0.05)
-                    {
-                        slime.Attack(_player);
-                        TriggerShake(3.0);
-                        ShowFloatingDamageNumber(_player.Position, slime.Strength, false);
-                        if (!_player.IsAlive)
-                            _gameManager.SendEvent(Event_.PlayerDead);
-                    }
-                });
-
-            slime.SetState(CharacterState.Idle);
+            SetupBeeBehavior(bee);
+            _gameManager.AddCharacter(bee);
+            _currentBeeCount++;
         }
 
-        private void DropGorgonItems(Vector2D position)
+        private void SpawnRandomEnemy()
         {
-            var questItems = new Dictionary<string, int>
-            {
-                { "slime_goo", 15 },
-                { "black_bottle", 1 },
-                { "necklace", 1 },
-                { "belt", 1 }
-            };
+            if (_gameManager == null) return;
+            int currentEnemies = _gameManager.Characters.Count(c => c is Enemy && c.IsAlive);
+            if (currentEnemies >= MAX_ENEMIES) return;
 
-            questItems["cheese"] = 2;
+            Vector2D spawnPos = GetRandomSpawnPosition();
+            int tileX = (int)(spawnPos.X / 32);
+            int tileY = (int)(spawnPos.Y / 32);
 
-            foreach (var item in questItems)
+            const int HALF_MAP = 50;
+            const int BOTTOM_AREA_START_Y = 75;
+
+            bool isBottomLeftSquare = (tileX < HALF_MAP && tileY > BOTTOM_AREA_START_Y);
+            bool isBottomLeftTriangle = (tileX < HALF_MAP && tileY >= HALF_MAP && tileY <= BOTTOM_AREA_START_Y);
+            bool isTopRight = (tileX >= HALF_MAP && tileY < HALF_MAP);
+
+            if (isBottomLeftSquare)
             {
-                if (_itemPrefabs.ContainsKey(item.Key))
-                {
-                    for (int i = 0; i < item.Value; i++)
-                    {
-                        DropItem(item.Key, position);
-                    }
-                }
+                string darkSlimeSpritePath = Path.Combine(_spritesPath, "DarkSlime.png");
+                if (!File.Exists(darkSlimeSpritePath))
+                    darkSlimeSpritePath = Path.Combine(_spritesPath, "Slime.png");
+
+                Enemy darkSlime = new Enemy(_gameManager.Grid, spawnPos, 1.5,
+                    $"DarkSlime_{DateTime.Now.Ticks}", 35f, 6f, darkSlimeSpritePath, 1.0,
+                    new SpriteInfo("DarkSlime", 48, 48), "DarkSlime");
+                SetupDarkSlimeBehavior(darkSlime);
+                _gameManager.AddCharacter(darkSlime);
             }
+            else if (isTopRight && _currentBeeCount < MAX_BEES)
+            {
+                SpawnBee(spawnPos);
+            }
+            else if (isBottomLeftTriangle)
+            {
+                string slimeSpritePath = Path.Combine(_spritesPath, "Slime.png");
+                Enemy slime = new Enemy(_gameManager.Grid, spawnPos, 1.5,
+                    $"Slime_{DateTime.Now.Ticks}", 30f, 4f, slimeSpritePath, 1.0,
+                    new SpriteInfo("Slime", 48, 48), "Slime");
+                SetupSlimeBehavior(slime);
+                _gameManager.AddCharacter(slime);
+            }
+            else
+            {
+                string slimeSpritePath = Path.Combine(_spritesPath, "Slime.png");
+                Enemy slime = new Enemy(_gameManager.Grid, spawnPos, 1.5,
+                    $"Slime_{DateTime.Now.Ticks}", 30f, 4f, slimeSpritePath, 1.0,
+                    new SpriteInfo("Slime", 48, 48), "Slime");
+                SetupSlimeBehavior(slime);
+                _gameManager.AddCharacter(slime);
+            }
+        }
 
-            ShowFloatingMessage("Горгона рассыпалась в прах, оставив все свои сокровища!", 3.0);
-            _gameManager.PlaySound("item.mp3", 0.8f);
+        private void RotateGorgonToPlayer()
+        {
+            if (_player == null || _gorgon == null) return;
+            Vector2D direction = _player.Position - _gorgon.Position;
+            if (direction.X > 0 && _gorgonLastDirection != 1)
+            {
+                _gorgonLastDirection = 1;
+                _gameManager?.FlipHorizontally(_gorgon, false);
+            }
+            else if (direction.X < 0 && _gorgonLastDirection != -1)
+            {
+                _gorgonLastDirection = -1;
+                _gameManager?.FlipHorizontally(_gorgon, true);
+            }
         }
 
         private void InitializeMap(GameManager gm)
@@ -962,10 +1049,21 @@ namespace GameProj
                 { 'W', (TileType.Floor, "W_hint", 5, 5) }, { 'S', (TileType.Floor, "S_hint", 5,5) },
                 { 'A', (TileType.Floor, "A_hint", 5,5) }, { 'D', (TileType.Floor, "D_hint", 5,5) }
             };
+
             string mapPath = Path.Combine(_mapsPath, "level2.txt");
             string largeDecorPath = Path.Combine(_mapsPath, "decor_large2.txt");
-            if (File.Exists(mapPath)) gm.LoadMap(mapPath, largeDecorPath, backgroundMappings, largeDecorMappings);
-            else CreateDefaultMap(gm);
+
+            if (File.Exists(mapPath))
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    gm.LoadMap(mapPath, largeDecorPath, backgroundMappings, largeDecorMappings);
+                }), DispatcherPriority.Background);
+            }
+            else
+            {
+                Dispatcher.BeginInvoke(new Action(() => CreateDefaultMap(gm)), DispatcherPriority.Background);
+            }
         }
 
         private void CreateDefaultMap(GameManager gm)
@@ -979,163 +1077,279 @@ namespace GameProj
             for (int i = 0; i < 30; i++) gm.SetTile(rand.Next(2, MAP_WIDTH - 2), rand.Next(2, MAP_HEIGHT - 2), TileType.Wall, "Tree");
         }
 
-        private void SubscribeInventoryEvents()
+        private void SubscribeInventoryEvents() => _player.Inventory.ItemsChanged += OnInventoryChanged;
+        private void OnInventoryChanged(IEnumerable<int> indexes) { if (InventoryPanel.Visibility == Visibility.Visible && !_isQuestLogOpen) RefreshInventory(); }
+
+        // Метод для обновления статус бара
+        private void UpdateStatusBar()
         {
-            if (_player != null && _player.Inventory != null)
+            if (_player == null) return;
+            var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
+            if (statusBar != null)
             {
-                _player.Inventory.ItemsChanged += OnInventoryChanged;
+                statusBar.Text = $"ОЗ: {_player.Health}/{_player.MaxHealth} СИЛА: {_player.Strength}";
             }
         }
-
-        private void OnInventoryChanged(IEnumerable<int> indexes)
-        {
-            if (InventoryPanel.Visibility == Visibility.Visible)
-            {
-                RefreshInventory();
-            }
-        }
-
-        // ==================== МЕТОДЫ ИНВЕНТАРЯ ====================
-
         private void ToggleInventory()
         {
-            if (InventoryPanel.Visibility == Visibility.Visible)
+            if (InventoryPanel.Visibility == Visibility.Visible && !_isQuestLogOpen)
             {
                 InventoryPanel.Visibility = Visibility.Collapsed;
                 InventoryPanel.Focusable = false;
             }
+            else if (InventoryPanel.Visibility == Visibility.Visible && _isQuestLogOpen)
+            {
+                InventoryPanel.Visibility = Visibility.Collapsed;
+                InventoryPanel.Focusable = false;
+                _isQuestLogOpen = false;
+            }
             else
             {
                 RefreshInventory();
+                // НЕ обновляем и НЕ показываем StatusBar при открытии инвентаря
                 InventoryPanel.Visibility = Visibility.Visible;
                 InventoryPanel.Focusable = true;
                 InventoryPanel.Focus();
+                _isQuestLogOpen = false;
+                InventoryDescriptionText.Text = "Нет предметов";
+
+                // Скрываем StatusBar если он виден
+                var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
+                if (statusBar != null)
+                {
+                    statusBar.Visibility = Visibility.Collapsed;
+                }
+            }
+        }
+
+        private void ToggleQuestLog()
+        {
+            if (InventoryPanel.Visibility == Visibility.Visible && !_isQuestLogOpen)
+            {
+                InventoryPanel.Visibility = Visibility.Collapsed;
+                InventoryPanel.Focusable = false;
+            }
+
+            if (InventoryPanel.Visibility == Visibility.Visible && _isQuestLogOpen)
+            {
+                InventoryPanel.Visibility = Visibility.Collapsed;
+                InventoryPanel.Focusable = false;
+                _isQuestLogOpen = false;
+            }
+            else
+            {
+                RefreshQuestLog();
+                UpdateStatusBar(); // Обновляем статус бар
+                InventoryPanel.Visibility = Visibility.Visible;
+                InventoryPanel.Focusable = true;
+                InventoryPanel.Focus();
+                _isQuestLogOpen = true;
+
+                // Показываем StatusBar при открытии журнала квестов
+                var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
+                if (statusBar != null)
+                {
+                    statusBar.Visibility = Visibility.Visible;
+                }
             }
         }
 
         private void RefreshInventory()
         {
             if (_player == null) return;
-
             _inventoryItems.Clear();
             var inventory = _player.Inventory;
+
             for (int i = 0; i < inventory.TotalSlots; i++)
             {
                 var item = inventory.GetItem(i);
                 if (item != null && item.Quantity > 0)
-                {
-                    _inventoryItems.Add(new ItemWrapper { Item = item });
-                }
+                    _inventoryItems.Add(item);
             }
 
             if (_selectedInventoryIndex >= _inventoryItems.Count)
                 _selectedInventoryIndex = _inventoryItems.Count > 0 ? _inventoryItems.Count - 1 : 0;
 
-            UpdateInventorySelection();
             UpdateInventoryDescription();
 
+            // Скрываем StatusBar когда показываем инвентарь
+            var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
+            if (statusBar != null && !_isQuestLogOpen)
+            {
+                statusBar.Visibility = Visibility.Collapsed;
+            }
+
+            bool wasQuestLog = _isQuestLogOpen;
+
             InventoryItemsControl.ItemsSource = null;
             InventoryItemsControl.ItemsSource = _inventoryItems;
+
+            if (!wasQuestLog)
+            {
+                InventoryItemsControl.SelectedIndex = _selectedInventoryIndex;
+                InventoryItemsControl.UpdateLayout();
+            }
         }
 
-        private void UpdateInventorySelection()
+        private void RefreshQuestLog()
         {
-            for (int i = 0; i < _inventoryItems.Count; i++)
-                _inventoryItems[i].IsSelected = (i == _selectedInventoryIndex);
+            if (_player == null) return;
+
+            _activeQuests.Clear();
+
+            foreach (var quest in _availableQuests.Values)
+            {
+                if (quest.Status == QuestStatus.Active)
+                {
+                    _activeQuests.Add(quest);
+                }
+            }
+
+            if (_selectedQuestIndex >= _activeQuests.Count)
+                _selectedQuestIndex = _activeQuests.Count > 0 ? _activeQuests.Count - 1 : -1;
+
+            UpdateQuestDescription();
+            UpdateStatusBar();
+
+            // Показываем StatusBar когда показываем квесты
+            var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
+            if (statusBar != null)
+            {
+                statusBar.Visibility = Visibility.Visible;
+            }
+
+            bool wasQuestLog = _isQuestLogOpen;
+
             InventoryItemsControl.ItemsSource = null;
-            InventoryItemsControl.ItemsSource = _inventoryItems;
+            InventoryItemsControl.ItemsSource = _activeQuests;
+
+            if (wasQuestLog && _selectedQuestIndex >= 0)
+            {
+                InventoryItemsControl.SelectedIndex = _selectedQuestIndex;
+                InventoryItemsControl.UpdateLayout();
+            }
         }
 
         private void UpdateInventoryDescription()
         {
             if (_selectedInventoryIndex >= 0 && _selectedInventoryIndex < _inventoryItems.Count)
-            {
-                var item = _inventoryItems[_selectedInventoryIndex].Item;
-                InventoryDescriptionText.Text = $"{item.Description}";
-            }
+                InventoryDescriptionText.Text = _inventoryItems[_selectedInventoryIndex].Description;
             else
-            {
                 InventoryDescriptionText.Text = "Нет предметов";
+        }
+
+        private void UpdateQuestDescription()
+        {
+            if (_activeQuests.Count == 0)
+            {
+                InventoryDescriptionText.Text = "Нет активных заданий";
+                return;
+            }
+
+            if (_selectedQuestIndex >= 0 && _selectedQuestIndex < _activeQuests.Count)
+            {
+                var quest = _activeQuests[_selectedQuestIndex];
+                InventoryDescriptionText.Text = quest.Description;
             }
         }
 
         private void MoveInventorySelection(int delta)
         {
-            if (_inventoryItems.Count == 0) return;
-            _selectedInventoryIndex += delta;
-            if (_selectedInventoryIndex < 0) _selectedInventoryIndex = _inventoryItems.Count - 1;
-            if (_selectedInventoryIndex >= _inventoryItems.Count) _selectedInventoryIndex = 0;
-            UpdateInventorySelection();
-            UpdateInventoryDescription();
+            if (_isQuestLogOpen)
+            {
+                if (_activeQuests.Count == 0) return;
+                _selectedQuestIndex += delta;
+                if (_selectedQuestIndex < 0) _selectedQuestIndex = _activeQuests.Count - 1;
+                if (_selectedQuestIndex >= _activeQuests.Count) _selectedQuestIndex = 0;
+
+                InventoryItemsControl.SelectedIndex = _selectedQuestIndex;
+                InventoryItemsControl.ScrollIntoView(InventoryItemsControl.SelectedItem);
+                UpdateQuestDescription();
+            }
+            else
+            {
+                if (_inventoryItems.Count == 0) return;
+                _selectedInventoryIndex += delta;
+                if (_selectedInventoryIndex < 0) _selectedInventoryIndex = _inventoryItems.Count - 1;
+                if (_selectedInventoryIndex >= _inventoryItems.Count) _selectedInventoryIndex = 0;
+
+                InventoryItemsControl.SelectedIndex = _selectedInventoryIndex;
+                InventoryItemsControl.ScrollIntoView(InventoryItemsControl.SelectedItem);
+                UpdateInventoryDescription();
+            }
         }
 
         private void UseSelectedInventoryItem()
         {
-            if (_selectedInventoryIndex < 0 || _selectedInventoryIndex >= _inventoryItems.Count) return;
-            var item = _inventoryItems[_selectedInventoryIndex].Item;
+            if (_isQuestLogOpen)
+            {
+                if (_selectedQuestIndex >= 0 && _selectedQuestIndex < _activeQuests.Count)
+                {
+                    var quest = _activeQuests[_selectedQuestIndex];
+                }
+                return;
+            }
 
+            if (_selectedInventoryIndex < 0 || _selectedInventoryIndex >= _inventoryItems.Count) return;
+            var item = _inventoryItems[_selectedInventoryIndex];
             if (item.Key == "health_potion")
             {
                 if (_player.Health < _player.MaxHealth)
                 {
-                    float healAmount = 30f;
-                    _player.Heal(healAmount);
-
+                    _player.Heal(30f);
                     for (int i = 0; i < _player.Inventory.TotalSlots; i++)
                     {
                         var invItem = _player.Inventory.GetItem(i);
-                        if (invItem == item)
-                        {
-                            _player.Inventory.ModifyItemQuantity(i, -1);
-                            break;
-                        }
+                        if (invItem == item) { _player.Inventory.ModifyItemQuantity(i, -1); break; }
                     }
-
-                    ShowFloatingMessage($"Вы использовали {item.Name} и восстановили {healAmount} HP.", 2.0);
                     RefreshInventory();
-
-                    if (_inventoryItems.Count == 0)
-                        _selectedInventoryIndex = -1;
-                    else if (_selectedInventoryIndex >= _inventoryItems.Count)
-                        _selectedInventoryIndex = _inventoryItems.Count - 1;
-
-                    UpdateInventorySelection();
+                    if (_inventoryItems.Count == 0) _selectedInventoryIndex = -1;
+                    else if (_selectedInventoryIndex >= _inventoryItems.Count) _selectedInventoryIndex = _inventoryItems.Count - 1;
                     UpdateInventoryDescription();
+                    UpdateStatusBar();
                 }
-                else
-                {
-                    ShowFloatingMessage("У вас полное здоровье!", 1.5);
-                }
-            }
-            else
-            {
-                ShowFloatingMessage($"Нельзя использовать {item.Name} (пока что)", 1.5);
             }
         }
 
-        // ==================== ОСТАЛЬНЫЕ МЕТОДЫ ====================
-
         private void DropItem(string itemId, Vector2D position)
         {
-            if (!_itemPrefabs.ContainsKey(itemId))
-            {
-                System.Diagnostics.Debug.WriteLine($"Предмет с ID '{itemId}' не найден в словаре!");
-                return;
-            }
+            if (!_itemPrefabs.ContainsKey(itemId)) return;
 
             Item originalItem = _itemPrefabs[itemId];
-            Item itemToDrop = new Item(
-                originalItem.Key,
-                originalItem.Name,
-                originalItem.Description,
-                originalItem.IconPath,
-                originalItem.IsStackable,
-                1
-            );
+            Item itemToDrop = new Item(originalItem.Key, originalItem.Name, originalItem.Description,
+                originalItem.IconPath, originalItem.IsStackable, 1);
 
-            ImageSource source = null;
+            ImageSource source = GetItemIcon(itemId);
+
+            var image = new Image
+            {
+                Source = source,
+                Width = 24,
+                Height = 24,
+                Stretch = Stretch.Uniform,
+                Tag = itemToDrop
+            };
+
+            Canvas.SetLeft(image, position.X - 12);
+            Canvas.SetTop(image, position.Y - 12);
+            GameArea.Children.Add(image);
+
+            var bounceAnimation = new DoubleAnimation
+            {
+                From = position.Y - 30,
+                To = position.Y - 12,
+                Duration = TimeSpan.FromSeconds(0.35),
+                EasingFunction = new BounceEase { Bounces = 2, Bounciness = 2 }
+            };
+            image.BeginAnimation(Canvas.TopProperty, bounceAnimation);
+        }
+
+        private ImageSource GetItemIcon(string itemId)
+        {
+            if (_iconCache.TryGetValue(itemId, out var cached)) return cached;
+
             string iconPath = Path.Combine(_itemsPath, $"{itemId}.png");
-
+            ImageSource source;
             if (File.Exists(iconPath))
             {
                 var bmp = new BitmapImage(new Uri(iconPath));
@@ -1145,54 +1359,15 @@ namespace GameProj
             else
             {
                 var drawing = new DrawingGroup();
-                Brush defaultColor = Brushes.LimeGreen;
-
-                if (itemId.Contains("sword")) defaultColor = Brushes.Silver;
-                else if (itemId.Contains("potion")) defaultColor = Brushes.Red;
-                else if (itemId.Contains("honey")) defaultColor = Brushes.Gold;
-                else if (itemId.Contains("gorgon")) defaultColor = Brushes.Purple;
-
-                drawing.Children.Add(new GeometryDrawing
-                {
-                    Brush = defaultColor,
-                    Geometry = new EllipseGeometry(new Rect(0, 0, 20, 20))
-                });
+                Brush color = itemId.Contains("sword") ? Brushes.Silver :
+                             itemId.Contains("potion") ? Brushes.Red :
+                             itemId.Contains("honey") ? Brushes.Gold :
+                             itemId.Contains("gorgon") ? Brushes.Purple : Brushes.LimeGreen;
+                drawing.Children.Add(new GeometryDrawing { Brush = color, Geometry = new EllipseGeometry(new Rect(0, 0, 20, 20)) });
                 source = new DrawingImage(drawing);
             }
-
-            var image = new Image
-            {
-                Source = source,
-                Width = 24,
-                Height = 24,
-                Stretch = Stretch.Uniform,
-                Tag = itemToDrop,
-                Opacity = 1.0
-            };
-
-            Canvas.SetLeft(image, position.X - 12);
-            Canvas.SetTop(image, position.Y - 12);
-            Canvas.SetZIndex(image, 4);
-            GameArea.Children.Add(image);
-
-            image.Opacity = 0;
-            var fadeIn = new DoubleAnimation
-            {
-                From = 0,
-                To = 1,
-                Duration = TimeSpan.FromSeconds(0.2),
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-            };
-            image.BeginAnimation(UIElement.OpacityProperty, fadeIn);
-
-            var bounceAnimation = new DoubleAnimation
-            {
-                From = position.Y - 30,
-                To = position.Y - 12,
-                Duration = TimeSpan.FromSeconds(0.35),
-                EasingFunction = new BounceEase { Bounces = 2, Bounciness = 2, EasingMode = EasingMode.EaseOut }
-            };
-            image.BeginAnimation(Canvas.TopProperty, bounceAnimation);
+            _iconCache[itemId] = source;
+            return source;
         }
 
         private Enemy FindNearestEnemy(double radius)
@@ -1227,58 +1402,29 @@ namespace GameProj
             if (_attackCooldown < 0) return false;
             if (_player == null || !_player.IsAlive) return false;
 
-            double attackRange = 60.0;
             float playerDamage = _player.Strength;
             bool hitSomething = false;
 
             for (int i = _gameManager.Characters.Count - 1; i >= 0; i--)
             {
-                var charac = _gameManager.Characters[i];
+                var character = _gameManager.Characters[i];
 
-                if (charac is Enemy enemy && enemy.IsAlive && Vector2D.Distance(_player.Position, enemy.Position) <= attackRange)
+                if (character is Enemy enemy && enemy.IsAlive)
                 {
-                    enemy.TakeDamage(playerDamage);
-                    hitSomething = true;
-                    ShowFloatingDamageNumber(enemy.Position, playerDamage, false);
-                    TriggerShake(2.0);
-                    _gameManager.PlaySound("attack.mp3", 0.6f);
+                    double attackRange = enemy.HitboxRadius;
 
-                    if (!enemy.IsAlive)
+                    if (Vector2D.Distance(_player.Position, enemy.Position) <= attackRange)
                     {
-                        if (enemy.Type == "Slime")
-                        {
-                            DropItem("slime_goo", enemy.Position);
-                            _gameManager.RemoveCharacter(enemy);
-                        }
-                        else if (enemy.Type == "Bee")
-                        {
-                            DropItem("honey", enemy.Position);
-                            _gameManager.RemoveCharacter(enemy);
-                        }
-                        else if (enemy.Type == "Gorgon")
-                        {
-                            DropGorgonItems(enemy.Position);
-                            _gameManager.RemoveCharacter(enemy);
+                        enemy.TakeDamage(playerDamage);
+                        hitSomething = true;
+                        ShowFloatingDamageNumber(enemy.Position, playerDamage, false);
+                        TriggerShake(2.0);
+                        _gameManager.PlaySound("attack.mp3", 0.6f);
 
-                            if (_gorgon == enemy)
-                            {
-                                _gorgon = null;
-                            }
-
-                            if (!_gorgonDefeated)
-                            {
-                                _gorgonDefeated = true;
-
-                                if (_gorgonKillQuest != null && _gorgonKillQuest.Status == QuestStatus.Active)
-                                {
-                                    _gorgonKillQuest.EnemyDefeated = true;
-                                    ShowFloatingMessage("Горгона побеждена! Вернись к Финну за наградой.", 3.0);
-                                }
-                            }
-                        }
-                        else
+                        if (enemy.Type == "Gorgon" && _gorgon != null && _gorgon.CurrentState == CharacterState.Idle)
                         {
-                            _gameManager.RemoveCharacter(enemy);
+                            _gorgon.SetState(CharacterState.Chase);
+                            _gameManager.PlaySound("attack.mp3", 0.7f);
                         }
                     }
                 }
@@ -1293,32 +1439,113 @@ namespace GameProj
         private void HandleQuestDialogue(Player player, NPC npc)
         {
             Quest quest = null;
+            bool isGirlNPC = (npc == _girl);
 
             if (npc == _questAlly)
+            {
                 _availableQuests.TryGetValue("slime_quest", out quest);
-            else if (npc == _girl)
-                _availableQuests.TryGetValue("girl_quest", out quest);
+            }
+            else if (isGirlNPC)
+            {
+                if (_availableQuests.TryGetValue("girl_quest_second", out var secondQuest) && secondQuest.Status != QuestStatus.Completed)
+                {
+                    quest = secondQuest;
+                }
+                else if (_availableQuests.TryGetValue("girl_quest_first", out var firstQuest))
+                {
+                    quest = firstQuest;
+                }
+            }
             else if (npc == _schoolGirl)
+            {
                 _availableQuests.TryGetValue("schoolgirl_quest", out quest);
+            }
             else if (npc == _woman)
+            {
                 _availableQuests.TryGetValue("woman_quest", out quest);
+            }
+            else if (npc == null && _gorgon != null && Vector2D.Distance(_player.Position, _gorgon.Position) <= 60)
+            {
+                _availableQuests.TryGetValue("gorgon_necklace_quest", out quest);
+            }
 
-            if (quest == null) return;
+            if (quest == null)
+            {
+                if (isGirlNPC && _availableQuests.ContainsKey("girl_quest_second") &&
+                    _availableQuests["girl_quest_second"].Status == QuestStatus.Completed)
+                {
+                    ShowDialogue("Спасибо за всю помощь! Теперь я в безопасности.");
+                }
+                return;
+            }
+
+            if (quest.Id == "girl_quest_second" && quest.Status == QuestStatus.Active)
+            {
+                bool hasYellowSphere = player.Inventory.GetTotalQuantity("yellow_thing") >= 1;
+                bool hasSilverSphere = player.Inventory.GetTotalQuantity("silver_thing") >= 1;
+
+                if (hasYellowSphere || hasSilverSphere)
+                {
+                    string usedSphere = hasYellowSphere ? "yellow_thing" : "silver_thing";
+                    quest.RequiredItems.Clear();
+                    quest.AddRequiredItem(usedSphere, 1);
+
+                    foreach (var reward in quest.RewardsItems)
+                    {
+                        if (_itemPrefabs.ContainsKey(reward.Key))
+                        {
+                            player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
+                        }
+                    }
+
+                    if (quest.RewardStrength > 0)
+                        player.Strength += quest.RewardStrength;
+
+                    quest.Complete();
+
+                    ShowDialogue(quest.CompletionDialogue);
+                    _gameManager?.PlaySound("item.mp3", 0.6f);
+
+                    if (_isQuestLogOpen) RefreshQuestLog();
+                    if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
+                    return;
+                }
+                else
+                {
+                    ShowDialogue("Принеси магическую сферу, если найдешь. Говорят, они где-то в этом лесу...");
+                    return;
+                }
+            }
 
             if (quest.Status == QuestStatus.NotStarted)
             {
                 quest.Start();
                 ShowDialogue(quest.StartDialogue);
+                if (_isQuestLogOpen) RefreshQuestLog();
                 return;
             }
 
             if (quest.Status == QuestStatus.Active)
             {
-                if (quest.IsComplete(player.Inventory))
+                bool isComplete = false;
+
+                if (quest.RequiresEnemyKill)
                 {
-                    foreach (var required in quest.RequiredItems)
+                    isComplete = quest.EnemyDefeated;
+                }
+                else
+                {
+                    isComplete = quest.IsComplete(player.Inventory);
+                }
+
+                if (isComplete)
+                {
+                    if (!quest.RequiresEnemyKill)
                     {
-                        player.Inventory.RemoveItem(required.Key, required.Value);
+                        foreach (var required in quest.RequiredItems)
+                        {
+                            player.Inventory.RemoveItem(required.Key, required.Value);
+                        }
                     }
 
                     foreach (var reward in quest.RewardsItems)
@@ -1332,15 +1559,43 @@ namespace GameProj
                     if (quest.RewardStrength > 0)
                         player.Strength += quest.RewardStrength;
 
-                    quest.Status = QuestStatus.Completed;
+                    quest.Complete();
 
-                    ShowDialogue(quest.CompletionDialogue, "Может мне дорожным знаком работать, а?");
-                    ShowFloatingMessage($"Квест выполнен! +{quest.RewardStrength} Силы!", 3.0);
+                    ShowDialogue(quest.CompletionDialogue);
                     _gameManager?.PlaySound("item.mp3", 0.6f);
+
+                    if (_isQuestLogOpen) RefreshQuestLog();
+                    if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
+
+                    if (quest.Id == "girl_quest_first")
+                    {
+                        ShowDialogue("А можешь помочь еще?");
+                    }
                 }
                 else
                 {
-                    ShowDialogue("Если не знаешь как сражаться, попробуй нажать на кнопку E");
+                    if (quest.RequiresEnemyKill)
+                    {
+                        ShowDialogue($"Ты еще не победил {quest.RequiredEnemyType}. Будь осторожен!");
+                    }
+                    else
+                    {
+                        string missingItems = "";
+                        foreach (var req in quest.RequiredItems)
+                        {
+                            int has = player.Inventory.GetTotalQuantity(req.Key);
+                            if (has < req.Value)
+                            {
+                                var item = _itemPrefabs.ContainsKey(req.Key) ? _itemPrefabs[req.Key] : null;
+                                string itemName = item != null ? item.Name : req.Key;
+                                missingItems += $"\n  • {itemName}: {has}/{req.Value}";
+                            }
+                        }
+                        if (!string.IsNullOrEmpty(missingItems))
+                            ShowDialogue($"Ты еще не собрал все предметы:{missingItems}");
+                        else
+                            ShowDialogue("Ты еще не собрал все предметы. Приходи, когда соберешь.");
+                    }
                 }
                 return;
             }
@@ -1357,38 +1612,66 @@ namespace GameProj
 
             if (_gorgonKillQuest.Status == QuestStatus.NotStarted)
             {
-                _gorgonKillQuest.Start();
-                ShowDialogue(_gorgonKillQuest.StartDialogue);
-            }
-            else if (_gorgonKillQuest.Status == QuestStatus.Active)
-            {
-                if (_gorgonKillQuest.EnemyDefeated && _gorgonDefeated)
+                if (_gorgonDefeated)
                 {
-                    _gorgonKillQuest.Complete();
+                    ShowDialogue("Ого! Ты уже победил Горгону? Невероятно! Вот твоя награда!");
 
                     foreach (var reward in _gorgonKillQuest.RewardsItems)
-                    {
                         if (_itemPrefabs.ContainsKey(reward.Key))
-                        {
                             _player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
-                        }
-                    }
 
                     if (_gorgonKillQuest.RewardStrength > 0)
                         _player.Strength += _gorgonKillQuest.RewardStrength;
 
-                    ShowFloatingMessage($"Квест выполнен! +{_gorgonKillQuest.RewardStrength} Силы!", 3.0);
-                    ShowDialogue(_gorgonKillQuest.CompletionDialogue);
                     _gameManager.PlaySound("item.mp3", 0.8f);
 
-                    _gameManager.SendEvent(Event_.GorgonDefeated);
+                    _gorgonKillQuest.Start();
+                    _gorgonKillQuest.EnemyDefeated = true;
+                    _gorgonKillQuest.Complete();
+                    _gameManager.SendEvent(Event_.GoodEndingCompleted);
+
+                    if (_isQuestLogOpen) RefreshQuestLog();
+                    if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
                 }
                 else
                 {
-                    ShowDialogue("Горгона всё ещё там... .");
+                    _gorgonKillQuest.Start();
+                    ShowDialogue(_gorgonKillQuest.StartDialogue);
+                    if (_isQuestLogOpen) RefreshQuestLog();
                 }
+                return;
             }
-            else if (_gorgonKillQuest.Status == QuestStatus.Completed)
+
+            if (_gorgonKillQuest.Status == QuestStatus.Active)
+            {
+                if (_gorgonDefeated)
+                {
+                    _gorgonKillQuest.EnemyDefeated = true;
+                    _gorgonKillQuest.Complete();
+
+                    foreach (var reward in _gorgonKillQuest.RewardsItems)
+                        if (_itemPrefabs.ContainsKey(reward.Key))
+                            _player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
+
+                    if (_gorgonKillQuest.RewardStrength > 0)
+                        _player.Strength += _gorgonKillQuest.RewardStrength;
+
+                    ShowDialogue(_gorgonKillQuest.CompletionDialogue);
+                    _gameManager.PlaySound("item.mp3", 0.8f);
+
+                    _gameManager.SendEvent(Event_.GoodEndingCompleted);
+
+                    if (_isQuestLogOpen) RefreshQuestLog();
+                    if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
+                }
+                else
+                {
+                    ShowDialogue("Горгона всё ещё там... Будь осторожен!");
+                }
+                return;
+            }
+
+            if (_gorgonKillQuest.Status == QuestStatus.Completed)
             {
                 ShowDialogue(_gorgonKillQuest.AlreadyCompletedDialogue);
             }
@@ -1398,25 +1681,15 @@ namespace GameProj
         {
             _gorgonInteractionCount++;
 
-            string[] annoyedDialogues = {
-                "Пшел вон отсюда, у меня для тебя ничего нет.",
-                "Я же сказала - отстань!",
-                "Сколько можно приставать?!"
-            };
-
-            if (_gorgonInteractionCount >= GORGON_ANNOYANCE_THRESHOLD && !_gorgonHasGivenItems)
+            if (_gorgon != null && _gorgon.CurrentState == CharacterState.Idle)
             {
-                ShowDialogue("Забери это и проваливай!");
-                GiveAllQuestItemsFromGorgon();
-                TriggerShake(8.0);
-                _gameManager.PlaySound("attack.mp3", 0.9f);
+                ShowDialogue("Ты разозлил меня! Теперь ты пожалеешь!");
+                _gorgon.SetState(CharacterState.Chase);
+                _gameManager.PlaySound("attack.mp3", 0.7f);
             }
-            else if (_gorgonHasGivenItems)
+            else if (_gorgon != null)
             {
-                ShowDialogue("Я же сказала - проваливай! Больше ничего не дам!");
-            }
-            else
-            {
+                string[] annoyedDialogues = { "Пшел вон отсюда!", "Я же сказала - отстань!", "Сколько можно приставать?!" };
                 int dialogueIndex = Math.Min(_gorgonInteractionCount - 1, annoyedDialogues.Length - 1);
                 ShowDialogue(annoyedDialogues[dialogueIndex]);
             }
@@ -1425,7 +1698,6 @@ namespace GameProj
         private bool TryInteractWithNPC()
         {
             Character nearestNPC = null;
-            double minDistance = 60.0;
 
             foreach (var character in _gameManager.Characters)
             {
@@ -1446,16 +1718,19 @@ namespace GameProj
 
             if (nearestNPC is Enemy enemy && enemy.Type == "Gorgon")
             {
-                HandleGorgonInteraction();
+                if (_availableQuests.TryGetValue("gorgon_necklace_quest", out var quest) && quest.Status != QuestStatus.Completed)
+                {
+                    HandleQuestDialogue(_player, null);
+                }
+                else
+                {
+                    HandleGorgonInteraction();
+                }
             }
             else if (nearestNPC is NSM_NPC && nearestNPC == _finn)
-            {
                 HandleFinnDialogue();
-            }
             else if (nearestNPC is NPC npc)
-            {
                 HandleQuestDialogue(_player, npc);
-            }
 
             return true;
         }
@@ -1487,10 +1762,8 @@ namespace GameProj
                 {
                     _gameManager.PlaySound("pickup.mp3", 0.5f);
                     GameArea.Children.Remove(closestItemImage);
-                    ShowFloatingMessage($"Подобрано: {itemToPickup.Name}", 1.5);
                     return true;
                 }
-                else ShowFloatingMessage("Инвентарь полон!", 1.0);
             }
             return false;
         }
@@ -1499,27 +1772,109 @@ namespace GameProj
         {
             if (_finn == null || !_finn.IsAlive || _player == null || !_player.IsAlive) return;
             if (Vector2D.Distance(_player.Position, _finn.Position) <= 60)
-            {
                 HandleFinnDialogue();
-            }
         }
 
         public void Restart()
         {
             _gameTimer?.Stop();
             _spawnTimer?.Stop();
-            GameArea.Children.Clear();
-            OverlayCanvas.Children.Clear();
 
+            GameOverBox.Visibility = Visibility.Collapsed;
+            InventoryPanel.Visibility = Visibility.Collapsed;
+            DialogueBox.Visibility = Visibility.Collapsed;
+            _isQuestLogOpen = false;
+            _dialogueQueue.Clear();
+
+            var itemsToRemove = GameArea.Children.OfType<Image>().Where(img => img.Tag is Item).ToList();
+            foreach (var item in itemsToRemove)
+                GameArea.Children.Remove(item);
+
+            var messagesToRemove = OverlayCanvas.Children.OfType<TextBlock>().ToList();
+            foreach (var msg in messagesToRemove)
+                OverlayCanvas.Children.Remove(msg);
+
+            _gorgonDefeated = false;
+            _tutorialCompleted = false;
+            _currentBeeCount = 0;
+            _gorgonInteractionCount = 0;
+            _attackCooldown = 0.4;
             _currentZoom = 1.0;
+
             if (_cameraScale != null)
             {
                 _cameraScale.ScaleX = _currentZoom;
                 _cameraScale.ScaleY = _currentZoom;
             }
 
-            _tutorialCompleted = false;
-            InitializeGame();
+            var enemiesToRemove = _gameManager.Characters
+                .Where(c => c is Enemy && c != _gorgon)
+                .ToList();
+
+            foreach (var enemy in enemiesToRemove)
+            {
+                _gameManager.RemoveCharacter(enemy);
+            }
+            _currentBeeCount = 0;
+
+            _player.SetPosition(48 * 32, 48 * 32);
+            _player.ResetHealth();
+            _player.Strength = 15f;
+            _player.Stop();
+
+            _player.Inventory.Clear();
+            _player.Inventory.AddItem(_itemPrefabs["black_bottle"], 1);
+            _player.Inventory.AddItem(_itemPrefabs["slime_goo"], 10);
+            _player.Inventory.AddItem(_itemPrefabs["yellow_thing"], 1);
+            _player.Inventory.AddItem(_itemPrefabs["necklace"], 1);
+            _player.Inventory.AddItem(_itemPrefabs["belt"], 1);
+
+            _questAlly.Position = new Vector2D(46 * 32, 48 * 32);
+            _questAlly.ResetHealth();
+            _questAlly.SetState(CharacterState.Idle);
+            _questAlly.Stop();
+
+            _girl.Position = new Vector2D(18 * 32, 4 * 32);
+            _girl.ResetHealth();
+            _girl.SetState(CharacterState.Idle);
+            _girl.Stop();
+
+            _schoolGirl.Position = new Vector2D(30 * 32, 35 * 32);
+            _schoolGirl.ResetHealth();
+            _schoolGirl.SetState(CharacterState.Idle);
+            _schoolGirl.Stop();
+
+            _woman.Position = new Vector2D(70 * 32, 65 * 32);
+            _woman.ResetHealth();
+            _woman.SetState(CharacterState.Idle);
+            _woman.Stop();
+
+            if (_gorgon != null)
+            {
+                _gorgon.Position = new Vector2D(82 * 32, 79 * 32);
+                _gorgon.ResetHealth();
+                _gorgon.SetState(CharacterState.Idle);
+                _gorgon.Stop();
+                _gorgon.SetTarget(null);
+            }
+
+            _finn.Position = new Vector2D(25 * 32, 25 * 32);
+            _finn.ResetHealth();
+            _finn.SetState(CharacterState.Decision);
+            _finn.Stop();
+
+            foreach (var quest in _availableQuests.Values)
+            {
+                quest.Reset();
+            }
+
+            RefreshInventory();
+            RefreshQuestLog();
+            UpdateStatusBar();
+
+            StartSpawnTimer();
+            _gameManager.SetState(State_.Tutorial);
+            StartGameLoop();
 
             Focus();
         }
@@ -1527,21 +1882,10 @@ namespace GameProj
         public void ShowDialogue(params string[] texts)
         {
             if (texts == null || texts.Length == 0) return;
-
             _player.Stop();
-            
-
-            // Добавляем все строки в очередь
-            foreach (var text in texts)
-            {
-                _dialogueQueue.Enqueue(text);
-            }
-
-            // Если диалоговое окно не видно - показываем первое сообщение
+            foreach (var text in texts) _dialogueQueue.Enqueue(text);
             if (DialogueBox.Visibility != Visibility.Visible && _dialogueQueue.Count > 0)
-            {
                 ShowNextDialogue();
-            }
         }
 
         private void ShowNextDialogue()
@@ -1553,15 +1897,6 @@ namespace GameProj
             }
         }
 
-        public void ShowFloatingMessage(string message, double durationSeconds)
-        {
-            var textBlock = new TextBlock { Text = message, FontSize = 14, Padding = new Thickness(15), TextAlignment = TextAlignment.Center, Foreground = Brushes.White, Background = new SolidColorBrush(Color.FromArgb(180, 0, 0, 0)) };
-            OverlayCanvas.Children.Add(textBlock);
-            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(durationSeconds) };
-            timer.Tick += (s, args) => { timer.Stop(); OverlayCanvas.Children.Remove(textBlock); };
-            timer.Start();
-        }
-
         public void ShowFloatingDamageNumber(Vector2D worldPosition, float amount, bool isHeal)
         {
             if (_cameraTransform == null || _cameraScale == null) return;
@@ -1571,7 +1906,6 @@ namespace GameProj
                 FontSize = 24,
                 FontWeight = FontWeights.Bold,
                 Foreground = isHeal ? Brushes.LimeGreen : Brushes.Red,
-                Opacity = 1,
                 Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 2, ShadowDepth = 1 }
             };
             double screenX = (worldPosition.X * _cameraScale.ScaleX) + _cameraTransform.X;
@@ -1588,7 +1922,6 @@ namespace GameProj
         }
 
         public void TriggerShake(double intensity = 5.0) => _shakeIntensity = intensity;
-
 
         private void UpdateCameraShake()
         {
@@ -1609,28 +1942,21 @@ namespace GameProj
         {
             if (_player != null && _cameraTransform != null && _cameraScale != null)
             {
-                double targetX = (ActualWidth / 2 - _player.Position.X * _currentZoom);
-                double targetY = (ActualHeight / 2 - _player.Position.Y * _currentZoom);
-                _cameraTransform.X = targetX;
-                _cameraTransform.Y = targetY;
+                _cameraTransform.X = ActualWidth / 2 - _player.Position.X * _currentZoom;
+                _cameraTransform.Y = ActualHeight / 2 - _player.Position.Y * _currentZoom;
             }
         }
 
         private void OnSizeChanged(object sender, SizeChangedEventArgs e)
         {
             if (_player != null && _player.IsAlive) CenterCameraOnPlayer();
-
-            double baseWidth = 800;
-            double scale = ActualWidth / baseWidth;
+            double scale = ActualWidth / 800;
             DialogueText.FontSize = Math.Max(14, Math.Min(24, 18 * scale));
-
             double maxDialogueWidth = ActualWidth * 0.8;
             DialogueBox.MaxWidth = maxDialogueWidth;
             DialogueBox.Width = Math.Min(600, maxDialogueWidth);
-
             Canvas.SetLeft(DialogueBox, (ActualWidth - DialogueBox.Width) / 2);
             Canvas.SetTop(DialogueBox, ActualHeight - DialogueBox.Height - (ActualHeight * 0.05));
-
             if (InventoryPanel.Visibility == Visibility.Visible)
             {
                 Canvas.SetLeft(InventoryPanel, (ActualWidth - 700) / 2);
@@ -1640,9 +1966,7 @@ namespace GameProj
 
         private void OnMouseWheel(object sender, MouseWheelEventArgs e)
         {
-            var currentState = _gameManager.FSM.CurrentState;
-            double delta = e.Delta > 0 ? ZOOM_STEP : -ZOOM_STEP;
-            double newZoom = _currentZoom + delta;
+            double newZoom = _currentZoom + (e.Delta > 0 ? ZOOM_STEP : -ZOOM_STEP);
             if (newZoom >= MIN_ZOOM && newZoom <= MAX_ZOOM)
             {
                 _currentZoom = newZoom;
@@ -1667,11 +1991,15 @@ namespace GameProj
             HandleInput();
             _gameManager.Update();
             UpdateCameraShake();
-
             if (_player != null && _player.IsAlive && _cameraTransform != null && _shakeIntensity == 0)
                 CenterCameraOnPlayer();
-
             RotateGorgonToPlayer();
+
+            // Обновляем статус бар только если открыт журнал квестов
+            if (InventoryPanel.Visibility == Visibility.Visible && _isQuestLogOpen)
+            {
+                UpdateStatusBar();
+            }
         }
 
         private void HandleInput()
@@ -1701,44 +2029,63 @@ namespace GameProj
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
-            base.OnKeyDown(e);
-
-            // Обработка инвентаря
-            if (InventoryPanel.Visibility == Visibility.Visible)
-            {
-                switch (e.Key)
-                {
-                    case Key.I:
-                    case Key.Escape:
-                        ToggleInventory();
-                        e.Handled = true;
-                        break;
-                    case Key.W:
-                        MoveInventorySelection(-1);
-                        e.Handled = true;
-                        break;
-                    case Key.S:
-                        MoveInventorySelection(1);
-                        e.Handled = true;
-                        break;
-                    case Key.Enter:
-                        UseSelectedInventoryItem();
-                        e.Handled = true;
-                        break;
-                }
-                return;
-            }
-
-            var currentState = _gameManager.FSM.CurrentState;
-            if (e.Key == Key.R && currentState.Id == _gameManager._endState.Id)
+            if (e.Key == Key.R)
             {
                 Restart();
                 e.Handled = true;
                 return;
             }
 
+            base.OnKeyDown(e);
+
+            if (InventoryPanel.Visibility == Visibility.Visible)
+            {
+                switch (e.Key)
+                {
+                    case Key.I:
+                        if (!_isQuestLogOpen) ToggleInventory();
+                        else ToggleQuestLog();
+                        e.Handled = true;
+                        break;
+                    case Key.J:
+                        if (_isQuestLogOpen) ToggleQuestLog();
+                        else ToggleQuestLog();
+                        e.Handled = true;
+                        break;
+                    case Key.Escape:
+                        if (_isQuestLogOpen) ToggleQuestLog();
+                        else ToggleInventory();
+                        e.Handled = true;
+                        break;
+                    case Key.W: MoveInventorySelection(-1); e.Handled = true; break;
+                    case Key.S: MoveInventorySelection(1); e.Handled = true; break;
+                    case Key.Enter: UseSelectedInventoryItem(); e.Handled = true; break;
+                }
+                return;
+            }
+
+            if (DialogueBox.Visibility == Visibility.Visible)
+            {
+                if (e.Key == Key.F || e.Key == Key.Escape || e.Key == Key.Enter || e.Key == Key.Space)
+                {
+                    DialogueBox.Visibility = Visibility.Collapsed;
+                    if (_dialogueQueue.Count > 0) ShowNextDialogue();
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            var currentState = _gameManager.FSM.CurrentState;
+
             if (currentState.Id == _gameManager._tutorialState.Id)
             {
+                if (e.Key == Key.Escape)
+                {
+                    OnExitToMenu?.Invoke();
+                    e.Handled = true;
+                    return;
+                }
+
                 if (e.Key == Key.W || e.Key == Key.S || e.Key == Key.A || e.Key == Key.D || e.Key == Key.E || e.Key == Key.I || e.Key == Key.Space)
                 {
                     HandleInput();
@@ -1749,52 +2096,19 @@ namespace GameProj
 
             if (currentState.Id == _gameManager._gameState.Id)
             {
-                if (e.Key == Key.I)
+                if (e.Key == Key.I) { ToggleInventory(); e.Handled = true; }
+                else if (e.Key == Key.J) { ToggleQuestLog(); e.Handled = true; }
+                else if (e.Key == Key.E) { TryPlayerAttack(); e.Handled = true; }
+                else if (e.Key == Key.F)
                 {
-                    ToggleInventory();
+                    if (!TryPickupItem() && !TryInteractWithNPC()) TryInteractWithFinn();
                     e.Handled = true;
-                    return;
                 }
-
-                if (e.Key == Key.E)
-                {
-                    TryPlayerAttack();
-                    e.Handled = true;
-                    return;
-                }
-
-                if (e.Key == Key.F)
-                {
-                    if (DialogueBox.Visibility == Visibility.Visible)
-                    {
-                        // Закрываем текущее окно и показываем следующее из очереди
-                        DialogueBox.Visibility = Visibility.Collapsed;
-
-                        if (_dialogueQueue.Count > 0)
-                        {
-                            ShowNextDialogue();
-                        }
-                    }
-                    else
-                    {
-                        if (!TryPickupItem() && !TryInteractWithNPC())
-                            TryInteractWithFinn();
-                    }
-                    e.Handled = true;
-                    return;
-                }
-
-                if (e.Key == Key.Escape)
-                    OnExitToMenu?.Invoke();
-
+                else if (e.Key == Key.Escape) OnExitToMenu?.Invoke();
                 e.Handled = true;
             }
         }
 
-        protected override void OnKeyUp(KeyEventArgs e)
-        {
-            base.OnKeyUp(e);
-            e.Handled = true;
-        }
+        protected override void OnKeyUp(KeyEventArgs e) { base.OnKeyUp(e); e.Handled = true; }
     }
 }

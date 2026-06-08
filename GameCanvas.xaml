@@ -10,30 +10,14 @@
              Background="Black">
 
     <UserControl.Resources>
-        <!-- Стиль для текста предметов инвентаря -->
-        <Style TargetType="TextBlock" x:Key="ItemTextStyle">
-            <Setter Property="FontSize" Value="28"/>
-            <Setter Property="Margin" Value="10,8"/>
-            <Setter Property="Foreground" Value="Black"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                    <Setter Property="Foreground" Value="DarkRed"/>
-                    <Setter Property="FontWeight" Value="Bold"/>
-                    <Setter Property="FontSize" Value="32"/>
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- Кисть для левой панели инвентаря (правая половина Setting_menu.png) -->
+        <!-- Кисть для левой панели инвентаря -->
         <ImageBrush x:Key="LeftPanelBrush" 
                     ImageSource="/Setting_menu.png"
                     Viewbox="0.5,0,0.5,1"
                     ViewboxUnits="RelativeToBoundingBox"
                     Stretch="Fill"/>
 
-        <!-- Кисть для правой панели инвентаря (Dialog_box.png) -->
+        <!-- Кисть для правой панели инвентаря -->
         <ImageBrush x:Key="RightPanelBrush" 
                     ImageSource="/Dialog_box.png"
                     Stretch="Fill"
@@ -108,28 +92,63 @@
                 FocusVisualStyle="{x:Null}">
             <Grid>
                 <!-- Левая панель с фоном - список предметов -->
-                <Border 
-                        CornerRadius="15" 
+                <Border CornerRadius="15" 
                         Background="{StaticResource LeftPanelBrush}"
                         Margin="20,20,300,20"
                         Focusable="False">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" 
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  Margin="30,20,30,20"
-                                  Focusable="False" >
-                        <ItemsControl x:Name="InventoryItemsControl" 
-                                      Focusable="False"
-                                      Background="Transparent" Height="438" Width="354">
-                            <ItemsControl.ItemTemplate>
+                    <StackPanel>
+                        <ListBox x:Name="InventoryItemsControl" 
+Background="Transparent" 
+BorderThickness="0"
+Focusable="False" Margin="60,70,60,40" FontFamily="GOST type B" FontSize="15" Height="341">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Setter Property="Padding" Value="0"/>
+                                    <Setter Property="Margin" Value="0"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="VerticalContentAlignment" Value="Center"/>
+                                    <Setter Property="FontSize" Value="28"/>
+                                    <Setter Property="Foreground" Value="Black"/>
+                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                    <Setter Property="Margin" Value="10,8"/>
+                                    <Setter Property="Focusable" Value="False"/>
+
+                                    <!-- Убираем рамку фокуса -->
+                                    <Setter Property="BorderBrush" Value="Transparent"/>
+                                    <Setter Property="BorderThickness" Value="0"/>
+
+                                    <!-- Полностью переопределяем шаблон, чтобы убрать визуальные эффекты -->
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <ContentPresenter 
+                   Content="{TemplateBinding Content}"
+                   HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+
+                                    <Style.Triggers>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Foreground" Value="DarkRed"/>
+                                            <Setter Property="FontWeight" Value="Bold"/>
+                                            <Setter Property="FontSize" Value="32"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding DisplayText}" 
-                                               Style="{StaticResource ItemTextStyle}"
-                                               Background="Transparent"
-                                               Focusable="False"/>
+                                    <TextBlock Text="{Binding}"/>
                                 </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock x:Name="StatusBar" Height="46" Width="372" FontFamily="GOST type B" FontWeight="Bold"  Text="ОЗ: 100/100 СИЛА: 15" TextAlignment="Center" FontSize="30"/>
+                    </StackPanel>
+
                 </Border>
 
                 <!-- Правая панель описания предмета -->
@@ -143,17 +162,18 @@
                         Focusable="False">
                     <TextBlock x:Name="InventoryDescriptionText"
                                Foreground="#3E2723" 
-                               FontSize="20" 
-                               FontWeight="Medium"
+                               FontSize="24" 
+                               FontWeight="Bold"
                                TextWrapping="Wrap" 
                                Margin="15,15,15,15"
                                VerticalAlignment="Center"
                                HorizontalAlignment="Center"
                                TextAlignment="Center"
                                Text="Нет предметов"
-                               Focusable="False"/>
+                               Focusable="False" FontFamily="GOST type B"/>
                 </Border>
             </Grid>
         </Border>
+
     </Grid>
 </UserControl>
