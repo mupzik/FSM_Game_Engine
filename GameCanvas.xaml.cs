@@ -21,7 +21,6 @@ namespace GameProj
         Completed
     }
 
-    // ==================== КЛАСС КВЕСТА ====================
     public class Quest
     {
         public string Id { get; private set; }
@@ -180,7 +179,6 @@ namespace GameProj
         private List<Item> _inventoryItems = new List<Item>();
         private int _selectedInventoryIndex = 0;
 
-        // Поля для журнала квестов
         private bool _isQuestLogOpen = false;
         private List<Quest> _activeQuests = new List<Quest>();
         private int _selectedQuestIndex = 0;
@@ -410,8 +408,7 @@ namespace GameProj
             var firstGirlQuest = new Quest("girl_quest_first", "Странная просьба", "Принеси черную жижу и 10 слизей")
                 .SetDialogues(
                     "Пожалуйста, помоги мне! Мне нужна черная жижа и 10 слизей. Я знаю, это странно, но это очень важно!",
-                    "Спасибо! Ты принес черную жижу и 10 слизей. Вот, держи ожерелье, его кто-то, наверное, потерял. Но есть еще одна просьба...",
-                    "Спасибо за помощь! Теперь я в безопасности."
+                    "Спасибо! Ты принес черную жижу и 10 слизей. Вот, держи ожерелье, его кто-то, наверное, потерял. Но есть еще одна просьба..."
                 )
                 .AddRequiredItem("black_bottle", 1)
                 .AddRequiredItem("slime_goo", 10)
@@ -435,48 +432,28 @@ namespace GameProj
 
             firstGirlQuest.OnQuestCompleted += (q) =>
             {
-                System.Diagnostics.Debug.WriteLine("First quest completed, adding second quest...");
                 if (!_availableQuests.ContainsKey("girl_quest_second"))
                 {
                     _availableQuests.Add("girl_quest_second", secondGirlQuest);
-                    System.Diagnostics.Debug.WriteLine("Second quest added to dictionary");
                 }
                 if (_isQuestLogOpen) RefreshQuestLog();
             };
 
             secondGirlQuest.OnQuestCompleted += (q) =>
             {
-                System.Diagnostics.Debug.WriteLine("Second quest completed! Spawning giant slime...");
-
-                bool hasYellowSphere = false;
-                bool hasSilverSphere = false;
-
                 foreach (var required in q.RequiredItems)
                 {
                     if (required.Key == "yellow_thing" && _player.Inventory.GetTotalQuantity("yellow_thing") >= required.Value)
-                        hasYellowSphere = true;
+                        SpawnGiantDarkSlime(true);
                     if (required.Key == "silver_thing" && _player.Inventory.GetTotalQuantity("silver_thing") >= required.Value)
-                        hasSilverSphere = true;
+                        SpawnGiantDarkSlime(false);
                 }
-
-                if (hasYellowSphere)
-                    _player.Inventory.RemoveItem("yellow_thing", 1);
-                else if (hasSilverSphere)
-                    _player.Inventory.RemoveItem("silver_thing", 1);
-
-                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-                timer.Tick += (s, args) =>
-                {
-                    timer.Stop();
-                    SpawnGiantDarkSlime(hasYellowSphere, hasSilverSphere);
-                };
-                timer.Start();
             };
 
             _availableQuests.Add("girl_quest_first", firstGirlQuest);
         }
 
-        private void SpawnGiantDarkSlime(bool hasYellowSphere, bool hasSilverSphere)
+        private void SpawnGiantDarkSlime(bool hasYellowSphere)
         {
             Vector2D spawnPos = new Vector2D(20 * 32 + 16, 10 * 32 + 16);
 
@@ -489,15 +466,15 @@ namespace GameProj
             float slimeHealth = 500f;
             float slimeStrength = 150f;
 
-            if (hasSilverSphere)
-            {
-                slimeHealth = 300f;
-                slimeStrength = 80f;
-            }
-            else if (hasYellowSphere)
+            if (hasYellowSphere)
             {
                 slimeHealth = 700f;
                 slimeStrength = 200f;
+            }
+            else
+            {
+                slimeHealth = 300f;
+                slimeStrength = 80f;
             }
 
             Enemy giantDarkSlime = new Enemy(_gameManager.Grid, spawnPos, 1.2,
@@ -651,7 +628,10 @@ namespace GameProj
                     "Спасибо за ожерелье... Теперь я спокойна.")
                 .AddRequiredItem("necklace", 1).AddRewardItem("silver_thing", 1).SetRewardStrength(0);
 
-            _availableQuests.Add("gorgon_necklace_quest", gorgonNecklaceQuest);
+            if (!_availableQuests.ContainsKey("gorgon_necklace_quest"))
+            {
+                _availableQuests.Add("gorgon_necklace_quest", gorgonNecklaceQuest);
+            }
         }
 
         private void InitializeFinn()
@@ -838,9 +818,21 @@ namespace GameProj
             gorgon.ConfigureState(CharacterState.Dead, onEnter: () =>
             {
                 gorgon.Stop();
-                var items = new Dictionary<string, int> { { "slime_goo", 15 }, { "black_bottle", 1 }, { "necklace", 1 }, { "belt", 1 }, { "cheese", 2 } };
-                foreach (var item in items)
-                    for (int i = 0; i < item.Value; i++) DropItem(item.Key, gorgon.Position);
+
+                bool necklaceQuestCompleted = false;
+                if (_availableQuests.TryGetValue("gorgon_necklace_quest", out var gorgonQuest))
+                {
+                    necklaceQuestCompleted = (gorgonQuest.Status == QuestStatus.Completed);
+                }
+
+                if (necklaceQuestCompleted)
+                {
+                    DropItem("necklace", gorgon.Position);
+                }
+                else
+                {
+                    DropItem("yellow_thing", gorgon.Position);
+                }
 
                 _gorgonDefeated = true;
 
@@ -1047,7 +1039,8 @@ namespace GameProj
                 { 't', (TileType.Wall, "Bush2", 2, 1) }, { 'p', (TileType.Wall, "Bush1", 1, 1) },
                 { 'a', (TileType.Wall, "Dragon_bones", 10, 10) }, {'F', (TileType.Floor, "F_hint", 2, 2) },
                 { 'W', (TileType.Floor, "W_hint", 5, 5) }, { 'S', (TileType.Floor, "S_hint", 5,5) },
-                { 'A', (TileType.Floor, "A_hint", 5,5) }, { 'D', (TileType.Floor, "D_hint", 5,5) }
+                { 'A', (TileType.Floor, "A_hint", 5,5) }, { 'D', (TileType.Floor, "D_hint", 5,5) },
+                { 'J', (TileType.Floor, "J_hint", 5,5) }, { 'I', (TileType.Floor, "i_hint", 5,5) }
             };
 
             string mapPath = Path.Combine(_mapsPath, "level2.txt");
@@ -1080,7 +1073,6 @@ namespace GameProj
         private void SubscribeInventoryEvents() => _player.Inventory.ItemsChanged += OnInventoryChanged;
         private void OnInventoryChanged(IEnumerable<int> indexes) { if (InventoryPanel.Visibility == Visibility.Visible && !_isQuestLogOpen) RefreshInventory(); }
 
-        // Метод для обновления статус бара
         private void UpdateStatusBar()
         {
             if (_player == null) return;
@@ -1106,14 +1098,12 @@ namespace GameProj
             else
             {
                 RefreshInventory();
-                // НЕ обновляем и НЕ показываем StatusBar при открытии инвентаря
                 InventoryPanel.Visibility = Visibility.Visible;
                 InventoryPanel.Focusable = true;
                 InventoryPanel.Focus();
                 _isQuestLogOpen = false;
                 InventoryDescriptionText.Text = "Нет предметов";
 
-                // Скрываем StatusBar если он виден
                 var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
                 if (statusBar != null)
                 {
@@ -1139,13 +1129,12 @@ namespace GameProj
             else
             {
                 RefreshQuestLog();
-                UpdateStatusBar(); // Обновляем статус бар
+                UpdateStatusBar();
                 InventoryPanel.Visibility = Visibility.Visible;
                 InventoryPanel.Focusable = true;
                 InventoryPanel.Focus();
                 _isQuestLogOpen = true;
 
-                // Показываем StatusBar при открытии журнала квестов
                 var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
                 if (statusBar != null)
                 {
@@ -1172,7 +1161,6 @@ namespace GameProj
 
             UpdateInventoryDescription();
 
-            // Скрываем StatusBar когда показываем инвентарь
             var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
             if (statusBar != null && !_isQuestLogOpen)
             {
@@ -1211,7 +1199,6 @@ namespace GameProj
             UpdateQuestDescription();
             UpdateStatusBar();
 
-            // Показываем StatusBar когда показываем квесты
             var statusBar = InventoryPanel.FindName("StatusBar") as TextBlock;
             if (statusBar != null)
             {
@@ -1447,13 +1434,13 @@ namespace GameProj
             }
             else if (isGirlNPC)
             {
-                if (_availableQuests.TryGetValue("girl_quest_second", out var secondQuest) && secondQuest.Status != QuestStatus.Completed)
-                {
-                    quest = secondQuest;
-                }
-                else if (_availableQuests.TryGetValue("girl_quest_first", out var firstQuest))
+                if (_availableQuests.TryGetValue("girl_quest_first", out var firstQuest) && firstQuest.Status != QuestStatus.Completed)
                 {
                     quest = firstQuest;
+                }
+                else if (_availableQuests.TryGetValue("girl_quest_second", out var secondQuest) && secondQuest.Status != QuestStatus.Completed)
+                {
+                    quest = secondQuest;
                 }
             }
             else if (npc == _schoolGirl)
@@ -1567,10 +1554,6 @@ namespace GameProj
                     if (_isQuestLogOpen) RefreshQuestLog();
                     if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
 
-                    if (quest.Id == "girl_quest_first")
-                    {
-                        ShowDialogue("А можешь помочь еще?");
-                    }
                 }
                 else
                 {
@@ -1787,12 +1770,10 @@ namespace GameProj
             _dialogueQueue.Clear();
 
             var itemsToRemove = GameArea.Children.OfType<Image>().Where(img => img.Tag is Item).ToList();
-            foreach (var item in itemsToRemove)
-                GameArea.Children.Remove(item);
+            foreach (var item in itemsToRemove) GameArea.Children.Remove(item);
 
             var messagesToRemove = OverlayCanvas.Children.OfType<TextBlock>().ToList();
-            foreach (var msg in messagesToRemove)
-                OverlayCanvas.Children.Remove(msg);
+            foreach (var msg in messagesToRemove) OverlayCanvas.Children.Remove(msg);
 
             _gorgonDefeated = false;
             _tutorialCompleted = false;
@@ -1800,34 +1781,27 @@ namespace GameProj
             _gorgonInteractionCount = 0;
             _attackCooldown = 0.4;
             _currentZoom = 1.0;
-
             if (_cameraScale != null)
             {
                 _cameraScale.ScaleX = _currentZoom;
                 _cameraScale.ScaleY = _currentZoom;
             }
 
-            var enemiesToRemove = _gameManager.Characters
-                .Where(c => c is Enemy && c != _gorgon)
-                .ToList();
-
-            foreach (var enemy in enemiesToRemove)
+            var allEnemies = _gameManager.Characters.Where(c => c is Enemy).ToList();
+            foreach (var enemy in allEnemies)
             {
                 _gameManager.RemoveCharacter(enemy);
             }
+            _gorgon = null;
             _currentBeeCount = 0;
+
+            DropItem("belt", new Vector2D(76 * 32, 92 * 32));
 
             _player.SetPosition(48 * 32, 48 * 32);
             _player.ResetHealth();
             _player.Strength = 15f;
             _player.Stop();
-
             _player.Inventory.Clear();
-            _player.Inventory.AddItem(_itemPrefabs["black_bottle"], 1);
-            _player.Inventory.AddItem(_itemPrefabs["slime_goo"], 10);
-            _player.Inventory.AddItem(_itemPrefabs["yellow_thing"], 1);
-            _player.Inventory.AddItem(_itemPrefabs["necklace"], 1);
-            _player.Inventory.AddItem(_itemPrefabs["belt"], 1);
 
             _questAlly.Position = new Vector2D(46 * 32, 48 * 32);
             _questAlly.ResetHealth();
@@ -1849,15 +1823,6 @@ namespace GameProj
             _woman.SetState(CharacterState.Idle);
             _woman.Stop();
 
-            if (_gorgon != null)
-            {
-                _gorgon.Position = new Vector2D(82 * 32, 79 * 32);
-                _gorgon.ResetHealth();
-                _gorgon.SetState(CharacterState.Idle);
-                _gorgon.Stop();
-                _gorgon.SetTarget(null);
-            }
-
             _finn.Position = new Vector2D(25 * 32, 25 * 32);
             _finn.ResetHealth();
             _finn.SetState(CharacterState.Decision);
@@ -1867,6 +1832,8 @@ namespace GameProj
             {
                 quest.Reset();
             }
+
+            InitializeGorgon();
 
             RefreshInventory();
             RefreshQuestLog();
@@ -1980,7 +1947,7 @@ namespace GameProj
         private void StartSpawnTimer()
         {
             _spawnTimer?.Stop();
-            _spawnTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+            _spawnTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             _spawnTimer.Tick += (s, e) => SpawnRandomEnemy();
             _spawnTimer.Start();
             SpawnRandomEnemy();
@@ -1995,7 +1962,6 @@ namespace GameProj
                 CenterCameraOnPlayer();
             RotateGorgonToPlayer();
 
-            // Обновляем статус бар только если открыт журнал квестов
             if (InventoryPanel.Visibility == Visibility.Visible && _isQuestLogOpen)
             {
                 UpdateStatusBar();
