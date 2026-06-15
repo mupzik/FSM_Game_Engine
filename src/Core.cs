@@ -1,10 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using static GameProj.GameManager;
-using static System.Windows.Forms.AxHost;
 
 namespace GameProj.src
 {

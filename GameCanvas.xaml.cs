@@ -1571,37 +1571,39 @@ namespace GameProj
         private void HandleQuestDialogue(Player player, NPC npc)
         {
             Quest quest = null;
+            bool isGirlNPC = (npc == _girl);
 
-            // Определяем квест через switch pattern matching
-            switch (npc)
+            if (npc == _questAlly)
             {
-                case NPC n when n == _questAlly:
-                    _availableQuests.TryGetValue("slime_quest", out quest);
-                    break;
-
-                case NPC n when n == _girl:
-                    if (_availableQuests.TryGetValue("girl_quest_first", out var firstQuest) && firstQuest.Status != QuestStatus.Completed)
-                        quest = firstQuest;
-                    else if (_availableQuests.TryGetValue("girl_quest_second", out var secondQuest) && secondQuest.Status != QuestStatus.Completed)
-                        quest = secondQuest;
-                    break;
-
-                case NPC n when n == _schoolGirl:
-                    _availableQuests.TryGetValue("schoolgirl_quest", out quest);
-                    break;
-
-                case NPC n when n == _woman:
-                    _availableQuests.TryGetValue("woman_quest", out quest);
-                    break;
-
-                case NPC n when n == null && _gorgon != null && Vector2D.Distance(_player.Position, _gorgon.Position) <= 60:
-                    _availableQuests.TryGetValue("gorgon_necklace_quest", out quest);
-                    break;
+                _availableQuests.TryGetValue("slime_quest", out quest);
+            }
+            else if (isGirlNPC)
+            {
+                if (_availableQuests.TryGetValue("girl_quest_first", out var firstQuest) && firstQuest.Status != QuestStatus.Completed)
+                {
+                    quest = firstQuest;
+                }
+                else if (_availableQuests.TryGetValue("girl_quest_second", out var secondQuest) && secondQuest.Status != QuestStatus.Completed)
+                {
+                    quest = secondQuest;
+                }
+            }
+            else if (npc == _schoolGirl)
+            {
+                _availableQuests.TryGetValue("schoolgirl_quest", out quest);
+            }
+            else if (npc == _woman)
+            {
+                _availableQuests.TryGetValue("woman_quest", out quest);
+            }
+            else if (npc == null && _gorgon != null && Vector2D.Distance(_player.Position, _gorgon.Position) <= 60)
+            {
+                _availableQuests.TryGetValue("gorgon_necklace_quest", out quest);
             }
 
             if (quest == null)
             {
-                if (npc == _girl && _availableQuests.ContainsKey("girl_quest_second") &&
+                if (isGirlNPC && _availableQuests.ContainsKey("girl_quest_second") &&
                     _availableQuests["girl_quest_second"].Status == QuestStatus.Completed)
                 {
                     ShowDialogue("Спасибо за всю помощь! Теперь я в безопасности.");
@@ -1609,132 +1611,126 @@ namespace GameProj
                 return;
             }
 
-            // Обработка второго квеста девушки (особый случай)
             if (quest.Id == "girl_quest_second" && quest.Status == QuestStatus.Active)
             {
-                HandleGirlSecondQuest(player, quest);
+                bool hasYellowSphere = player.Inventory.GetTotalQuantity("yellow_thing") >= 1;
+                bool hasSilverSphere = player.Inventory.GetTotalQuantity("silver_thing") >= 1;
+
+                if (hasYellowSphere || hasSilverSphere)
+                {
+                    string usedSphere = hasYellowSphere ? "yellow_thing" : "silver_thing";
+                    quest.RequiredItems.Clear();
+                    quest.AddRequiredItem(usedSphere, 1);
+
+                    foreach (var reward in quest.RewardsItems)
+                    {
+                        if (_itemPrefabs.ContainsKey(reward.Key))
+                        {
+                            player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
+                        }
+                    }
+
+                    if (quest.RewardStrength > 0)
+                        player.Strength += quest.RewardStrength;
+
+                    quest.Complete();
+
+                    ShowDialogue(quest.CompletionDialogue);
+                    _gameManager?.PlaySound("item.mp3", 0.6f);
+
+                    if (_isQuestLogOpen) RefreshQuestLog();
+                    if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
+                    return;
+                }
+                else
+                {
+                    ShowDialogue("Принеси магическую сферу, если найдешь. Говорят, они где-то в этом лесу...");
+                    return;
+                }
+            }
+
+            if (quest.Status == QuestStatus.NotStarted)
+            {
+                quest.Start();
+                ShowDialogue(quest.StartDialogue);
+                if (_isQuestLogOpen) RefreshQuestLog();
                 return;
             }
 
-            // Основная логика обработки квеста
-            switch (quest.Status)
+            if (quest.Status == QuestStatus.Active)
             {
-                case QuestStatus.NotStarted:
-                    quest.Start();
-                    ShowDialogue(quest.StartDialogue);
+                bool isComplete = false;
+
+                if (quest.RequiresEnemyKill)
+                {
+                    isComplete = quest.EnemyDefeated;
+                }
+                else
+                {
+                    isComplete = quest.IsComplete(player.Inventory);
+                }
+
+                if (isComplete)
+                {
+                    if (!quest.RequiresEnemyKill)
+                    {
+                        foreach (var required in quest.RequiredItems)
+                        {
+                            player.Inventory.RemoveItem(required.Key, required.Value);
+                        }
+                    }
+
+                    foreach (var reward in quest.RewardsItems)
+                    {
+                        if (_itemPrefabs.ContainsKey(reward.Key))
+                        {
+                            player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
+                        }
+                    }
+
+                    if (quest.RewardStrength > 0)
+                        player.Strength += quest.RewardStrength;
+
+                    quest.Complete();
+
+                    ShowDialogue(quest.CompletionDialogue);
+                    _gameManager?.PlaySound("item.mp3", 0.6f);
+
                     if (_isQuestLogOpen) RefreshQuestLog();
-                    break;
+                    if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
 
-                case QuestStatus.Active:
-                    HandleActiveQuest(player, quest);
-                    break;
-
-                case QuestStatus.Completed:
-                    ShowDialogue(quest.AlreadyCompletedDialogue);
-                    break;
-            }
-        }
-
-        private void HandleGirlSecondQuest(Player player, Quest quest)
-        {
-            bool hasYellowSphere = player.Inventory.GetTotalQuantity("yellow_thing") >= 1;
-            bool hasSilverSphere = player.Inventory.GetTotalQuantity("silver_thing") >= 1;
-
-            if (hasYellowSphere || hasSilverSphere)
-            {
-                string usedSphere = hasYellowSphere ? "yellow_thing" : "silver_thing";
-                quest.RequiredItems.Clear();
-                quest.AddRequiredItem(usedSphere, 1);
-
-                foreach (var reward in quest.RewardsItems)
+                }
+                else
                 {
-                    if (_itemPrefabs.ContainsKey(reward.Key))
+                    if (quest.RequiresEnemyKill)
                     {
-                        player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
+                        ShowDialogue($"Ты еще не победил {quest.RequiredEnemyType}. Будь осторожен!");
+                    }
+                    else
+                    {
+                        string missingItems = "";
+                        foreach (var req in quest.RequiredItems)
+                        {
+                            int has = player.Inventory.GetTotalQuantity(req.Key);
+                            if (has < req.Value)
+                            {
+                                var item = _itemPrefabs.ContainsKey(req.Key) ? _itemPrefabs[req.Key] : null;
+                                string itemName = item != null ? item.Name : req.Key;
+                                missingItems += $"\n  • {itemName}: {has}/{req.Value}";
+                            }
+                        }
+                        if (!string.IsNullOrEmpty(missingItems))
+                            ShowDialogue($"Ты еще не собрал все предметы:{missingItems}");
+                        else
+                            ShowDialogue("Ты еще не собрал все предметы. Приходи, когда соберешь.");
                     }
                 }
-
-                if (quest.RewardStrength > 0)
-                    player.Strength += quest.RewardStrength;
-
-                quest.Complete();
-                ShowDialogue(quest.CompletionDialogue);
-                _gameManager?.PlaySound("item.mp3", 0.6f);
-
-                if (_isQuestLogOpen) RefreshQuestLog();
-                if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
-            }
-            else
-            {
-                ShowDialogue("Принеси магическую сферу, если найдешь. Говорят, они где-то в этом лесу...");
-            }
-        }
-
-        private void HandleActiveQuest(Player player, Quest quest)
-        {
-            bool isComplete = quest.RequiresEnemyKill ? quest.EnemyDefeated : quest.IsComplete(player.Inventory);
-
-            if (isComplete)
-            {
-                CompleteQuest(player, quest);
-            }
-            else
-            {
-                ShowQuestProgress(player, quest);
-            }
-        }
-
-        private void CompleteQuest(Player player, Quest quest)
-        {
-            if (!quest.RequiresEnemyKill)
-            {
-                foreach (var required in quest.RequiredItems)
-                {
-                    player.Inventory.RemoveItem(required.Key, required.Value);
-                }
+                return;
             }
 
-            foreach (var reward in quest.RewardsItems)
+            if (quest.Status == QuestStatus.Completed)
             {
-                if (_itemPrefabs.ContainsKey(reward.Key))
-                {
-                    player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
-                }
-            }
-
-            if (quest.RewardStrength > 0)
-                player.Strength += quest.RewardStrength;
-
-            quest.Complete();
-            ShowDialogue(quest.CompletionDialogue);
-            _gameManager?.PlaySound("item.mp3", 0.6f);
-
-            if (_isQuestLogOpen) RefreshQuestLog();
-            if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
-        }
-
-        private void ShowQuestProgress(Player player, Quest quest)
-        {
-            if (quest.RequiresEnemyKill)
-            {
-                ShowDialogue($"Ты еще не победил {quest.RequiredEnemyType}. Будь осторожен!");
-            }
-            else
-            {
-                string missingItems = "";
-                foreach (var req in quest.RequiredItems)
-                {
-                    int has = player.Inventory.GetTotalQuantity(req.Key);
-                    if (has < req.Value)
-                    {
-                        var item = _itemPrefabs.ContainsKey(req.Key) ? _itemPrefabs[req.Key] : null;
-                        string itemName = item != null ? item.Name : req.Key;
-                        missingItems += $"\n  • {itemName}: {has}/{req.Value}";
-                    }
-                }
-                ShowDialogue(string.IsNullOrEmpty(missingItems)
-                    ? "Ты еще не собрал все предметы. Приходи, когда соберешь."
-                    : $"Ты еще не собрал все предметы:{missingItems}");
+                ShowDialogue(quest.AlreadyCompletedDialogue);
             }
         }
 
@@ -2165,33 +2161,33 @@ namespace GameProj
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
-{
-    // Перезапуск по R
-    if (e.Key == Key.R)
-    {
-        Restart();
-        e.Handled = true;
-        return;
-    }
-
-    // Открытие панели громкости по K
-    if (e.Key == Key.K)
-    {
-        ToggleVolumePanel();
-        e.Handled = true;
-        return;
-    }
-
-    // Если панель громкости открыта, игнорируем остальные клавиши
-    if (VolumePanel.Visibility == Visibility.Visible)
-    {
-        if (e.Key == Key.Escape || e.Key == Key.K)
         {
-            ToggleVolumePanel();
-            e.Handled = true;
-        }
-        return;
-    }
+            // Перезапуск по R
+            if (e.Key == Key.R)
+            {
+                Restart();
+                e.Handled = true;
+                return;
+            }
+
+            // Открытие панели громкости по K
+            if (e.Key == Key.K)
+            {
+                ToggleVolumePanel();
+                e.Handled = true;
+                return;
+            }
+
+            // Если панель громкости открыта, игнорируем остальные клавиши
+            if (VolumePanel.Visibility == Visibility.Visible)
+            {
+                if (e.Key == Key.Escape || e.Key == Key.K)
+                {
+                    ToggleVolumePanel();
+                    e.Handled = true;
+                }
+                return;
+            }
 
             base.OnKeyDown(e);
 
@@ -2273,7 +2269,7 @@ namespace GameProj
             if (_gameManager != null)
             {
                 _gameManager.SetMusicVolume(e.NewValue);
-                _gameManager.SetSFXVolume(e.NewValue); 
+                _gameManager.SetSFXVolume(e.NewValue);
             }
         }
 
