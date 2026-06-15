@@ -548,7 +548,7 @@ namespace GameProj
                                          Action<FSM<CharacterState, GameEvent>> update = null,
                                          Action<FSM<CharacterState, GameEvent>, GameEvent> eventHandler = null)
         {
-            if (state == CharacterState.Dead || state == CharacterState.Decision) return;
+            if (state == CharacterState.Decision) return;
             base.ConfigureState(state, onEnter, onExit, update, eventHandler);
         }
 
@@ -574,6 +574,8 @@ namespace GameProj
 
         private void DecisionUpdate(FSM<CharacterState, GameEvent> machine)
         {
+            if (!IsAlive)
+                SetState(CharacterState.Dead);
             if (!_transitions.TryGetValue(Brain.LastState, out var options) || options.Count == 0)
             {
                 SetState(CharacterState.Idle);

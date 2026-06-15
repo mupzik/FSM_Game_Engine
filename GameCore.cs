@@ -49,6 +49,11 @@ namespace GameProj
 
         internal readonly Random _rng = new Random();
 
+        // Настройки звука
+        private double _musicVolume = 0.5;
+        private double _sfxVolume = 0.7;
+        private MediaPlayer _musicPlayer;
+        private readonly List<MediaPlayer> _activeSounds = new List<MediaPlayer>();
 
         private FSM<State_, Event_> _gameFSM;
         public CompositeState<State_, Event_> _tutorialState;
@@ -58,18 +63,35 @@ namespace GameProj
         private readonly Dictionary<UIElement, double> _animationTime = new Dictionary<UIElement, double>();
 
         private readonly string _tilesPath, _spritesPath, _itemsPath, _soundsPath, _musicPath;
-        private MediaPlayer _musicPlayer;
 
         public IReadOnlyList<Character> Characters => _characters;
         public GameGrid Grid => _grid;
         public FSM<State_, Event_> FSM => _gameFSM;
 
+        // Свойства для доступа к настройкам звука
+        public double MusicVolume
+        {
+            get => _musicVolume;
+            set
+            {
+                _musicVolume = Math.Max(0, Math.Min(1, value));
+                if (_musicPlayer != null)
+                    _musicPlayer.Volume = _musicVolume;
+            }
+        }
+
+        public double SFXVolume
+        {
+            get => _sfxVolume;
+            set => _sfxVolume = Math.Max(0, Math.Min(1, value));
+        }
+
         public GameManager(
-     GameCanvas canvas,
-     int width,
-     int height,
-     Action<GameManager> mapInitializer = null,
-     bool enableSliding = true)
+            GameCanvas canvas,
+            int width,
+            int height,
+            Action<GameManager> mapInitializer = null,
+            bool enableSliding = true)
         {
             // Проверка параметров
             _canvas = canvas ?? throw new ArgumentNullException(nameof(canvas));
@@ -111,8 +133,6 @@ namespace GameProj
             // Инициализация музыкального плеера
             _musicPlayer = null;
 
-            
-
             // Вызов пользовательской инициализации карты
             mapInitializer?.Invoke(this);
 
@@ -136,7 +156,7 @@ namespace GameProj
             _musicPlayer = new MediaPlayer();
             _musicPlayer.Open(new Uri(fullPath, UriKind.Absolute));
             _musicPlayer.MediaEnded += (s, e) => _musicPlayer.Position = TimeSpan.Zero;
-            _musicPlayer.Volume = 0.5;
+            _musicPlayer.Volume = _musicVolume;
             _musicPlayer.Play();
         }
 
@@ -150,16 +170,81 @@ namespace GameProj
             }
         }
 
-        public void PlaySound(string fileName, float volume = 0.7f)
+        public void PlaySound(string fileName, float volumeScale = 1.0f)
         {
             string fullPath = Path.Combine(_soundsPath, fileName);
             if (!File.Exists(fullPath)) return;
 
             var player = new MediaPlayer();
+
+            // Сохраняем ссылку, чтобы player не уничтожился до окончания воспроизведения
+            _activeSounds.Add(player);
+
+            player.MediaOpened += (s, e) =>
+            {
+                player.Volume = Math.Max(0, Math.Min(1, _sfxVolume * volumeScale));
+                player.Play();
+            };
+
+            player.MediaEnded += (s, e) =>
+            {
+                player.Stop();
+                player.Close();
+                _activeSounds.Remove(player);
+            };
+
+            player.MediaFailed += (s, e) =>
+            {
+                _activeSounds.Remove(player);
+            };
+
             player.Open(new Uri(fullPath, UriKind.Absolute));
-            player.Volume = Math.Max(0, Math.Min(volume, 1));
-            player.MediaEnded += (s, e) => { player.Stop(); player.Close(); };
-            player.Play();
+        }
+
+        /// <summary>
+        /// Установить громкость музыки (0.0 - 1.0)
+        /// </summary>
+        public void SetMusicVolume(double volume)
+        {
+            MusicVolume = volume;
+        }
+
+        /// <summary>
+        /// Установить громкость звуковых эффектов (0.0 - 1.0)
+        /// </summary>
+        public void SetSFXVolume(double volume)
+        {
+            SFXVolume = volume;
+        }
+
+        /// <summary>
+        /// Получить текущую громкость музыки
+        /// </summary>
+        public double GetMusicVolume()
+        {
+            return _musicVolume;
+        }
+
+        /// <summary>
+        /// Получить текущую громкость звуковых эффектов
+        /// </summary>
+        public double GetSFXVolume()
+        {
+            return _sfxVolume;
+        }
+
+        /// <summary>
+        /// Включить/выключить звук музыки
+        /// </summary>
+        public void ToggleMusicMute()
+        {
+            if (_musicPlayer != null)
+            {
+                if (_musicPlayer.Volume > 0)
+                    _musicPlayer.Volume = 0;
+                else
+                    _musicPlayer.Volume = _musicVolume;
+            }
         }
 
         /// <summary>
@@ -731,266 +816,265 @@ namespace GameProj
         }
     }
 
- public class PhysicsEngine
-{
-    private const int TileSize = 32;
-    private const double Epsilon = 0.001;
-    private readonly GameGrid _grid;
-    private readonly bool _enableSliding; // Включено ли скольжение вдоль стен
-
-    /// <summary>
-    /// Конструктор физического движка
-    /// </summary>
-    /// <param name="grid">Игровая сетка с тайлами</param>
-    /// <param name="enableSliding">Включить скольжение вдоль стен (по умолчанию true)</param>
-    public PhysicsEngine(GameGrid grid, bool enableSliding = true)
+    public class PhysicsEngine
     {
-        _grid = grid ?? throw new ArgumentNullException(nameof(grid));
-        _enableSliding = enableSliding;
-    }
+        private const int TileSize = 32;
+        private const double Epsilon = 0.001;
+        private readonly GameGrid _grid;
+        private readonly bool _enableSliding; // Включено ли скольжение вдоль стен
 
-    /// <summary>
-    /// Обновление коллизий для всех персонажей
-    /// </summary>
-    public void UpdateCollisions(List<Character> characters)
-    {
-        foreach (var ch in characters.Where(c => c.IsAlive))
+        /// <summary>
+        /// Конструктор физического движка
+        /// </summary>
+        /// <param name="grid">Игровая сетка с тайлами</param>
+        /// <param name="enableSliding">Включить скольжение вдоль стен (по умолчанию true)</param>
+        public PhysicsEngine(GameGrid grid, bool enableSliding = true)
         {
-            // Исправляем застрявшие позиции
-            CorrectStuckPosition(ch);
+            _grid = grid ?? throw new ArgumentNullException(nameof(grid));
+            _enableSliding = enableSliding;
+        }
 
-            Vector2D oldPos = ch.Position;
-            Vector2D newPos = oldPos + ch.Velocity;
-
-            if (_enableSliding)
+        /// <summary>
+        /// Обновление коллизий для всех персонажей
+        /// </summary>
+        public void UpdateCollisions(List<Character> characters)
+        {
+            foreach (var ch in characters.Where(c => c.IsAlive))
             {
-                // Логика со скольжением вдоль стен
-                Vector2D resolvedPos = ResolveCollisionWithSliding(ch, oldPos, newPos);
-                ch.Position = resolvedPos;
+                // Исправляем застрявшие позиции
+                CorrectStuckPosition(ch);
 
-                // Сбрасываем скорость, если движения нет
-                if (Math.Abs(ch.Position.X - oldPos.X) < Epsilon)
-                    ch.Velocity.X = 0;
-                if (Math.Abs(ch.Position.Y - oldPos.Y) < Epsilon)
-                    ch.Velocity.Y = 0;
-            }
-            else
-            {
-                // Старая логика - полная остановка при столкновении
-                if (TryResolveCollision(ch, oldPos, newPos, out Vector2D resolvedPos))
+                Vector2D oldPos = ch.Position;
+                Vector2D newPos = oldPos + ch.Velocity;
+
+                if (_enableSliding)
                 {
+                    // Логика со скольжением вдоль стен
+                    Vector2D resolvedPos = ResolveCollisionWithSliding(ch, oldPos, newPos);
                     ch.Position = resolvedPos;
-                    if (Math.Abs(ch.Position.X - oldPos.X) < Epsilon) ch.Velocity.X = 0;
-                    if (Math.Abs(ch.Position.Y - oldPos.Y) < Epsilon) ch.Velocity.Y = 0;
+
+                    // Сбрасываем скорость, если движения нет
+                    if (Math.Abs(ch.Position.X - oldPos.X) < Epsilon)
+                        ch.Velocity.X = 0;
+                    if (Math.Abs(ch.Position.Y - oldPos.Y) < Epsilon)
+                        ch.Velocity.Y = 0;
                 }
                 else
                 {
-                    ch.Position = newPos;
+                    // Старая логика - полная остановка при столкновении
+                    if (TryResolveCollision(ch, oldPos, newPos, out Vector2D resolvedPos))
+                    {
+                        ch.Position = resolvedPos;
+                        if (Math.Abs(ch.Position.X - oldPos.X) < Epsilon) ch.Velocity.X = 0;
+                        if (Math.Abs(ch.Position.Y - oldPos.Y) < Epsilon) ch.Velocity.Y = 0;
+                    }
+                    else
+                    {
+                        ch.Position = newPos;
+                    }
                 }
+
+                // Очищаем очень маленькие скорости
+                if (Math.Abs(ch.Velocity.X) < Epsilon) ch.Velocity.X = 0;
+                if (Math.Abs(ch.Velocity.Y) < Epsilon) ch.Velocity.Y = 0;
             }
-
-            // Очищаем очень маленькие скорости
-            if (Math.Abs(ch.Velocity.X) < Epsilon) ch.Velocity.X = 0;
-            if (Math.Abs(ch.Velocity.Y) < Epsilon) ch.Velocity.Y = 0;
-        }
-    }
-
-    /// <summary>
-    /// Разрешение коллизии со скольжением вдоль стен
-    /// Двигаемся сначала по X, потом по Y, чтобы скользить вдоль препятствий
-    /// </summary>
-    private Vector2D ResolveCollisionWithSliding(Character ch, Vector2D oldPos, Vector2D newPos)
-    {
-        // Пробуем движение только по горизонтали
-        Vector2D xMovement = new Vector2D(newPos.X, oldPos.Y);
-        bool xCollision = CheckCollisionAtPosition(ch, xMovement, out _);
-
-        // Пробуем движение только по вертикали
-        Vector2D yMovement = new Vector2D(oldPos.X, newPos.Y);
-        bool yCollision = CheckCollisionAtPosition(ch, yMovement, out _);
-
-        // Нет коллизий - можно двигаться свободно
-        if (!xCollision && !yCollision)
-            return newPos;
-
-        // Коллизия только по горизонтали - двигаемся только по вертикали
-        if (xCollision && !yCollision)
-            return yMovement;
-
-        // Коллизия только по вертикали - двигаемся только по горизонтали
-        if (!xCollision && yCollision)
-            return xMovement;
-
-        // Коллизии по обеим осям - ищем наилучшую позицию
-        return FindBestSlidingPosition(ch, oldPos, newPos, xMovement, yMovement);
-    }
-
-    /// <summary>
-    /// Поиск лучшей позиции при скольжении (когда оба направления заблокированы)
-    /// Пытаемся найти проход между препятствиями
-    /// </summary>
-    private Vector2D FindBestSlidingPosition(Character ch, Vector2D oldPos, Vector2D newPos,
-                                                Vector2D xMovement, Vector2D yMovement)
-    {
-        // Пробуем двигаться по диагонали с уменьшенным шагом
-        Vector2D direction = (newPos - oldPos).Normalize();
-
-        // Делаем несколько шагов для поиска прохода
-        for (int step = 1; step <= 8; step++)
-        {
-            double stepSize = (newPos - oldPos).Length() / 8.0;
-            Vector2D candidate = oldPos + direction * (stepSize * step);
-
-            if (!CheckCollisionAtPosition(ch, candidate, out _))
-                return candidate;
         }
 
-        // Проверяем, можно ли хотя бы частично подвинуться по горизонтали
-        if (!CheckCollisionAtPosition(ch, xMovement, out _))
-            return xMovement;
-
-        // Проверяем, можно ли хотя бы частично подвинуться по вертикали
-        if (!CheckCollisionAtPosition(ch, yMovement, out _))
-            return yMovement;
-
-        // Если ничего не подошло - остаёмся на месте
-        return oldPos;
-    }
-
-    /// <summary>
-    /// Старый метод разрешения коллизий (без скольжения)
-    /// Возвращает true, если коллизия была разрешена
-    /// </summary>
-    private bool TryResolveCollision(Character ch, Vector2D oldPos, Vector2D newPos, out Vector2D resolvedPos)
-    {
-        // Если почти не двигаемся или нет коллизии в новой позиции
-        if ((newPos - oldPos).Length() < Epsilon || !CheckCollisionAtPosition(ch, newPos, out _))
+        /// <summary>
+        /// Разрешение коллизии со скольжением вдоль стен
+        /// Двигаемся сначала по X, потом по Y, чтобы скользить вдоль препятствий
+        /// </summary>
+        private Vector2D ResolveCollisionWithSliding(Character ch, Vector2D oldPos, Vector2D newPos)
         {
-            resolvedPos = newPos;
-            return false;
+            // Пробуем движение только по горизонтали
+            Vector2D xMovement = new Vector2D(newPos.X, oldPos.Y);
+            bool xCollision = CheckCollisionAtPosition(ch, xMovement, out _);
+
+            // Пробуем движение только по вертикали
+            Vector2D yMovement = new Vector2D(oldPos.X, newPos.Y);
+            bool yCollision = CheckCollisionAtPosition(ch, yMovement, out _);
+
+            // Нет коллизий - можно двигаться свободно
+            if (!xCollision && !yCollision)
+                return newPos;
+
+            // Коллизия только по горизонтали - двигаемся только по вертикали
+            if (xCollision && !yCollision)
+                return yMovement;
+
+            // Коллизия только по вертикали - двигаемся только по горизонтали
+            if (!xCollision && yCollision)
+                return xMovement;
+
+            // Коллизии по обеим осям - ищем наилучшую позицию
+            return FindBestSlidingPosition(ch, oldPos, newPos, xMovement, yMovement);
         }
 
-        // Ищем границу столкновения бинарным поиском
-        resolvedPos = BinarySearchCollision(ch, oldPos, newPos);
-        return true;
-    }
-
-    /// <summary>
-    /// Бинарный поиск точной позиции перед столкновением
-    /// </summary>
-    private Vector2D BinarySearchCollision(Character ch, Vector2D start, Vector2D end, int depth = 8)
-    {
-        if (depth <= 0) return start;
-
-        Vector2D mid = (start + end) / 2;
-        bool midCollides = CheckCollisionAtPosition(ch, mid, out _);
-        bool endCollides = CheckCollisionAtPosition(ch, end, out _);
-
-        if (midCollides)
-            return BinarySearchCollision(ch, start, mid, depth - 1);
-        else if (endCollides)
-            return BinarySearchCollision(ch, mid, end, depth - 1);
-        else
-            return end;
-    }
-
-    /// <summary>
-    /// Проверка коллизии персонажа с препятствиями в заданной позиции
-    /// </summary>
-    private bool CheckCollisionAtPosition(Character ch, Vector2D position, out Vector2D pushVector)
-    {
-        double halfSize = ch.Size / 2.0;
-        Rect charRect = new Rect(position.X - halfSize, position.Y - halfSize, ch.Size, ch.Size);
-
-        // Получаем все стены, пересекающиеся с персонажем
-        var intersectingWalls = GetIntersectingWalls(charRect);
-
-        if (!intersectingWalls.Any())
+        /// <summary>
+        /// Поиск лучшей позиции при скольжении (когда оба направления заблокированы)
+        /// Пытаемся найти проход между препятствиями
+        /// </summary>
+        private Vector2D FindBestSlidingPosition(Character ch, Vector2D oldPos, Vector2D newPos,
+                                                    Vector2D xMovement, Vector2D yMovement)
         {
-            pushVector = Vector2D.Zero;
-            return false;
-        }
+            // Пробуем двигаться по диагонали с уменьшенным шагом
+            Vector2D direction = (newPos - oldPos).Normalize();
 
-        // Рассчитываем вектор выталкивания
-        pushVector = CalculatePushVector(charRect, intersectingWalls);
-        return true;
-    }
-
-    /// <summary>
-    /// Получение всех стен (непроходимых тайлов) в области персонажа
-    /// </summary>
-    private List<Rect> GetIntersectingWalls(Rect charRect)
-    {
-        int minCol = (int)Math.Floor(charRect.Left / TileSize);
-        int maxCol = (int)Math.Floor((charRect.Right - Epsilon) / TileSize);
-        int minRow = (int)Math.Floor(charRect.Top / TileSize);
-        int maxRow = (int)Math.Floor((charRect.Bottom - Epsilon) / TileSize);
-
-        var walls = new List<Rect>();
-
-        for (int c = minCol; c <= maxCol; c++)
-        {
-            for (int r = minRow; r <= maxRow; r++)
+            // Делаем несколько шагов для поиска прохода
+            for (int step = 1; step <= 8; step++)
             {
-                if (_grid.InBounds(c, r) && !_grid[c, r].IsWalkable())
+                double stepSize = (newPos - oldPos).Length() / 8.0;
+                Vector2D candidate = oldPos + direction * (stepSize * step);
+
+                if (!CheckCollisionAtPosition(ch, candidate, out _))
+                    return candidate;
+            }
+
+            // Проверяем, можно ли хотя бы частично подвинуться по горизонтали
+            if (!CheckCollisionAtPosition(ch, xMovement, out _))
+                return xMovement;
+
+            // Проверяем, можно ли хотя бы частично подвинуться по вертикали
+            if (!CheckCollisionAtPosition(ch, yMovement, out _))
+                return yMovement;
+
+            // Если ничего не подошло - остаёмся на месте
+            return oldPos;
+        }
+
+        /// <summary>
+        /// Старый метод разрешения коллизий (без скольжения)
+        /// Возвращает true, если коллизия была разрешена
+        /// </summary>
+        private bool TryResolveCollision(Character ch, Vector2D oldPos, Vector2D newPos, out Vector2D resolvedPos)
+        {
+            // Если почти не двигаемся или нет коллизии в новой позиции
+            if ((newPos - oldPos).Length() < Epsilon || !CheckCollisionAtPosition(ch, newPos, out _))
+            {
+                resolvedPos = newPos;
+                return false;
+            }
+
+            // Ищем границу столкновения бинарным поиском
+            resolvedPos = BinarySearchCollision(ch, oldPos, newPos);
+            return true;
+        }
+
+        /// <summary>
+        /// Бинарный поиск точной позиции перед столкновением
+        /// </summary>
+        private Vector2D BinarySearchCollision(Character ch, Vector2D start, Vector2D end, int depth = 8)
+        {
+            if (depth <= 0) return start;
+
+            Vector2D mid = (start + end) / 2;
+            bool midCollides = CheckCollisionAtPosition(ch, mid, out _);
+            bool endCollides = CheckCollisionAtPosition(ch, end, out _);
+
+            if (midCollides)
+                return BinarySearchCollision(ch, start, mid, depth - 1);
+            else if (endCollides)
+                return BinarySearchCollision(ch, mid, end, depth - 1);
+            else
+                return end;
+        }
+
+        /// <summary>
+        /// Проверка коллизии персонажа с препятствиями в заданной позиции
+        /// </summary>
+        private bool CheckCollisionAtPosition(Character ch, Vector2D position, out Vector2D pushVector)
+        {
+            double halfSize = ch.Size / 2.0;
+            Rect charRect = new Rect(position.X - halfSize, position.Y - halfSize, ch.Size, ch.Size);
+
+            // Получаем все стены, пересекающиеся с персонажем
+            var intersectingWalls = GetIntersectingWalls(charRect);
+
+            if (!intersectingWalls.Any())
+            {
+                pushVector = Vector2D.Zero;
+                return false;
+            }
+
+            // Рассчитываем вектор выталкивания
+            pushVector = CalculatePushVector(charRect, intersectingWalls);
+            return true;
+        }
+
+        /// <summary>
+        /// Получение всех стен (непроходимых тайлов) в области персонажа
+        /// </summary>
+        private List<Rect> GetIntersectingWalls(Rect charRect)
+        {
+            int minCol = (int)Math.Floor(charRect.Left / TileSize);
+            int maxCol = (int)Math.Floor((charRect.Right - Epsilon) / TileSize);
+            int minRow = (int)Math.Floor(charRect.Top / TileSize);
+            int maxRow = (int)Math.Floor((charRect.Bottom - Epsilon) / TileSize);
+
+            var walls = new List<Rect>();
+
+            for (int c = minCol; c <= maxCol; c++)
+            {
+                for (int r = minRow; r <= maxRow; r++)
                 {
-                    walls.Add(new Rect(c * TileSize, r * TileSize, TileSize, TileSize));
+                    if (_grid.InBounds(c, r) && !_grid[c, r].IsWalkable())
+                    {
+                        walls.Add(new Rect(c * TileSize, r * TileSize, TileSize, TileSize));
+                    }
                 }
             }
+
+            return walls;
         }
 
-        return walls;
-    }
-
-    /// <summary>
-    /// Расчет вектора выталкивания из стен
-    /// </summary>
-    private Vector2D CalculatePushVector(Rect charRect, List<Rect> walls)
-    {
-        Vector2D push = Vector2D.Zero;
-
-        foreach (var wall in walls)
+        /// <summary>
+        /// Расчет вектора выталкивания из стен
+        /// </summary>
+        private Vector2D CalculatePushVector(Rect charRect, List<Rect> walls)
         {
-            // Вычисляем перекрытие с каждой стороной стены
-            double overlapLeft = charRect.Right - wall.Left;
-            double overlapRight = wall.Right - charRect.Left;
-            double overlapTop = charRect.Bottom - wall.Top;
-            double overlapBottom = wall.Bottom - charRect.Top;
+            Vector2D push = Vector2D.Zero;
 
-            // Находим минимальное перекрытие
-            double minOverlap = Math.Min(Math.Min(overlapLeft, overlapRight),
-                                        Math.Min(overlapTop, overlapBottom));
+            foreach (var wall in walls)
+            {
+                // Вычисляем перекрытие с каждой стороной стены
+                double overlapLeft = charRect.Right - wall.Left;
+                double overlapRight = wall.Right - charRect.Left;
+                double overlapTop = charRect.Bottom - wall.Top;
+                double overlapBottom = wall.Bottom - charRect.Top;
 
-            // Выталкиваем в сторону минимального перекрытия
-            if (Math.Abs(minOverlap - overlapLeft) < Epsilon)
-                push.X -= overlapLeft + Epsilon;
-            else if (Math.Abs(minOverlap - overlapRight) < Epsilon)
-                push.X += overlapRight + Epsilon;
-            else if (Math.Abs(minOverlap - overlapTop) < Epsilon)
-                push.Y -= overlapTop + Epsilon;
-            else
-                push.Y += overlapBottom + Epsilon;
+                // Находим минимальное перекрытие
+                double minOverlap = Math.Min(Math.Min(overlapLeft, overlapRight),
+                                            Math.Min(overlapTop, overlapBottom));
+
+                // Выталкиваем в сторону минимального перекрытия
+                if (Math.Abs(minOverlap - overlapLeft) < Epsilon)
+                    push.X -= overlapLeft + Epsilon;
+                else if (Math.Abs(minOverlap - overlapRight) < Epsilon)
+                    push.X += overlapRight + Epsilon;
+                else if (Math.Abs(minOverlap - overlapTop) < Epsilon)
+                    push.Y -= overlapTop + Epsilon;
+                else
+                    push.Y += overlapBottom + Epsilon;
+            }
+
+            return push;
         }
 
-        return push;
-    }
-
-    /// <summary>
-    /// Исправление застрявшей позиции персонажа (выталкивание из стен)
-    /// </summary>
-    private void CorrectStuckPosition(Character ch)
-    {
-        double halfSize = ch.Size / 2.0;
-        Rect charRect = new Rect(ch.Position.X - halfSize, ch.Position.Y - halfSize, ch.Size, ch.Size);
-
-        var walls = GetIntersectingWalls(charRect);
-
-        if (walls.Any())
+        /// <summary>
+        /// Исправление застрявшей позиции персонажа (выталкивание из стен)
+        /// </summary>
+        private void CorrectStuckPosition(Character ch)
         {
-            Vector2D push = CalculatePushVector(charRect, walls);
-            ch.Position += push;
+            double halfSize = ch.Size / 2.0;
+            Rect charRect = new Rect(ch.Position.X - halfSize, ch.Position.Y - halfSize, ch.Size, ch.Size);
+
+            var walls = GetIntersectingWalls(charRect);
+
+            if (walls.Any())
+            {
+                Vector2D push = CalculatePushVector(charRect, walls);
+                ch.Position += push;
+            }
         }
     }
- }
-    
 }

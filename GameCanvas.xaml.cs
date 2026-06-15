@@ -193,7 +193,7 @@ namespace GameProj
         private TranslateTransform _cameraTransform;
         private ScaleTransform _cameraScale;
         private TransformGroup _cameraTransformGroup;
-        private double _currentZoom = 1.0;
+        private double _currentZoom = 1.5;
         private double _shakeIntensity = 0;
 
         private string _tilesPath, _spritesPath, _itemsPath, _mapsPath, _soundsPath, _musicPath, _uiPath;
@@ -204,6 +204,9 @@ namespace GameProj
         private DispatcherTimer _spawnTimer;
         private bool _tutorialCompleted = false;
 
+        private StreamWriter _logWriter;
+        private string _logFilePath;
+
         public bool IsUIOpen => InventoryPanel.Visibility == Visibility.Visible || DialogueBox.Visibility == Visibility.Visible;
 
         public GameCanvas()
@@ -211,6 +214,35 @@ namespace GameProj
             InitializeComponent();
             Focusable = true;
             Loaded += OnLoaded;
+            InitializeLogging();
+        }
+
+        private void InitializeLogging()
+        {
+            string logsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
+            if (!Directory.Exists(logsDir)) Directory.CreateDirectory(logsDir);
+
+            _logFilePath = Path.Combine(logsDir, $"game_log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt");
+            try
+            {
+                _logWriter = new StreamWriter(_logFilePath, true);
+                _logWriter.AutoFlush = true;
+                WriteLog("ИГРА ЗАПУЩЕНА");
+                WriteLog($"Время: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to initialize log: {ex.Message}");
+            }
+        }
+
+        private void WriteLog(string message)
+        {
+            try
+            {
+                _logWriter?.WriteLine($"{message}");
+            }
+            catch { }
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
@@ -301,6 +333,7 @@ namespace GameProj
             SubscribeInventoryEvents();
             StartSpawnTimer();
 
+            WriteLog("начальное состояние Tutorial");
             _gameManager.SetState(State_.Tutorial);
             StartGameLoop();
         }
@@ -314,24 +347,67 @@ namespace GameProj
             var badEndingState = new State<State_, Event_>(State_.BadEnding);
             var secretEndingState = new State<State_, Event_>(State_.SecretEnding);
 
-            tutorialState.SetEventHandler((machine, ev) => { if (ev == Event_.TutorialCompleted) machine.SetState(gameState); });
-
-            gameState.SetEventHandler((machine, ev) =>
+            tutorialState.SetEventHandler((machine, ev) =>
             {
-                switch (ev)
+                if (ev == Event_.TutorialCompleted)
                 {
-                    case Event_.PlayerDead: machine.SetState(deadEndingState); break;
-                    case Event_.GorgonDefeated: machine.SetState(goodEndingState); break;
-                    case Event_.GoodEndingCompleted: machine.SetState(goodEndingState); break;
-                    case Event_.BadEndingCompleted: machine.SetState(badEndingState); break;
-                    case Event_.SecretEndingCompleted: machine.SetState(secretEndingState); break;
+                    WriteLog($"отправлено событие {ev}");
+                    WriteLog($"переход Tutorial - Game");
+                    machine.SetState(gameState);
                 }
             });
 
-            deadEndingState.SetEnter(() => Dispatcher.Invoke(() => GameOver(false, "ВЫ УМЕРЛИ!\n\nНажмите R для рестарта")));
-            goodEndingState.SetEnter(() => Dispatcher.Invoke(() => GameOver(true, "ПОБЕДА!\n\nНажмите R для рестарта")));
-            badEndingState.SetEnter(() => Dispatcher.Invoke(() => GameOver(false, "ПЛОХАЯ КОНЦОВКА\n\nНажмите R для рестарта")));
-            secretEndingState.SetEnter(() => Dispatcher.Invoke(() => GameOver(true, "СЕКРЕТНАЯ КОНЦОВКА\n\nНажмите R для рестарта")));
+            gameState.SetEventHandler((machine, ev) =>
+            {
+                WriteLog($"отправлено событие {ev}");
+                switch (ev)
+                {
+                    case Event_.PlayerDead:
+                        WriteLog($"переход Game - DeadEnding");
+                        machine.SetState(deadEndingState);
+                        break;
+                    case Event_.GorgonDefeated:
+                        WriteLog($"переход Game - GoodEnding");
+                        machine.SetState(goodEndingState);
+                        break;
+                    case Event_.GoodEndingCompleted:
+                        WriteLog($"переход Game - GoodEnding");
+                        machine.SetState(goodEndingState);
+                        break;
+                    case Event_.BadEndingCompleted:
+                        WriteLog($"переход Game - BadEnding");
+                        machine.SetState(badEndingState);
+                        break;
+                    case Event_.SecretEndingCompleted:
+                        WriteLog($"переход Game - SecretEnding");
+                        machine.SetState(secretEndingState);
+                        break;
+                }
+            });
+
+            deadEndingState.SetEnter(() => Dispatcher.Invoke(() =>
+            {
+                WriteLog($"переход в DeadEnding (игрок умер)");
+                GameOver(false, "ВЫ УМЕРЛИ!\n\nНажмите R для рестарта");
+            }));
+
+            goodEndingState.SetEnter(() => Dispatcher.Invoke(() =>
+            {
+                WriteLog($"переход в GoodEnding (победа)");
+                GameOver(true, "ПОБЕДА!\n\nНажмите R для рестарта");
+            }));
+
+            badEndingState.SetEnter(() => Dispatcher.Invoke(() =>
+            {
+                WriteLog($"переход в BadEnding (плохая концовка)");
+                GameOver(false, "ПЛОХАЯ КОНЦОВКА\n\nНажмите R для рестарта");
+            }));
+
+            secretEndingState.SetEnter(() => Dispatcher.Invoke(() =>
+            {
+                WriteLog($"переход в SecretEnding (секретная концовка)");
+                GameOver(true, "СЕКРЕТНАЯ КОНЦОВКА\n\nНажмите R для рестарта");
+            }));
 
             _gameManager._tutorialState = new CompositeState<State_, Event_>(State_.Tutorial, State_.Tutorial);
             _gameManager._gameState = new CompositeState<State_, Event_>(State_.Game, State_.Game);
@@ -885,7 +961,12 @@ namespace GameProj
 
         private void ConfigureFinnStates()
         {
-            _finn.ConfigureState(CharacterState.Dead, onEnter: () => { _finn.Stop(); _gameManager.RemoveCharacter(_finn); });
+            _finn.ConfigureState(CharacterState.Dead, onEnter: () =>
+            {
+                _finn.Stop();
+                DropItem("health_potion", _finn.Position);
+                _gameManager.RemoveCharacter(_finn);
+            });
 
             _finn.ConfigureState(CharacterState.Idle,
                 onEnter: () => _finn.Stop(),
@@ -1040,7 +1121,8 @@ namespace GameProj
                 { 'a', (TileType.Wall, "Dragon_bones", 10, 10) }, {'F', (TileType.Floor, "F_hint", 2, 2) },
                 { 'W', (TileType.Floor, "W_hint", 5, 5) }, { 'S', (TileType.Floor, "S_hint", 5,5) },
                 { 'A', (TileType.Floor, "A_hint", 5,5) }, { 'D', (TileType.Floor, "D_hint", 5,5) },
-                { 'J', (TileType.Floor, "J_hint", 5,5) }, { 'I', (TileType.Floor, "i_hint", 5,5) }
+                { 'J', (TileType.Floor, "J_hint", 5,5) }, { 'I', (TileType.Floor, "i_hint", 5,5) },
+                { 'щ', (TileType.Floor, "K_hint", 5,5) }, { 'E', (TileType.Floor, "e_hint", 2,2) }
             };
 
             string mapPath = Path.Combine(_mapsPath, "level2.txt");
@@ -1279,6 +1361,8 @@ namespace GameProj
 
             if (_selectedInventoryIndex < 0 || _selectedInventoryIndex >= _inventoryItems.Count) return;
             var item = _inventoryItems[_selectedInventoryIndex];
+
+            // Зелье здоровья
             if (item.Key == "health_potion")
             {
                 if (_player.Health < _player.MaxHealth)
@@ -1294,6 +1378,47 @@ namespace GameProj
                     else if (_selectedInventoryIndex >= _inventoryItems.Count) _selectedInventoryIndex = _inventoryItems.Count - 1;
                     UpdateInventoryDescription();
                     UpdateStatusBar();
+                }
+            }
+
+            if (item.Key == "honey")
+            {
+                _player.MaxHealth += 1;
+                _player.Heal(1); // Восстанавливаем 1 HP
+                for (int i = 0; i < _player.Inventory.TotalSlots; i++)
+                {
+                    var invItem = _player.Inventory.GetItem(i);
+                    if (invItem == item) { _player.Inventory.ModifyItemQuantity(i, -1); break; }
+                }
+                RefreshInventory();
+                if (_inventoryItems.Count == 0) _selectedInventoryIndex = -1;
+                else if (_selectedInventoryIndex >= _inventoryItems.Count) _selectedInventoryIndex = _inventoryItems.Count - 1;
+                UpdateInventoryDescription();
+                UpdateStatusBar();
+
+                ShowFloatingDamageNumber(_player.Position, 1, true);
+                _gameManager.PlaySound("item.mp3", 0.6f);
+            }
+
+            // ДОБАВИТЬ ЭТОТ БЛОК - Сыр (+25 HP)
+            if (item.Key == "cheese")
+            {
+                if (_player.Health < _player.MaxHealth)
+                {
+                    _player.Heal(25f);
+                    for (int i = 0; i < _player.Inventory.TotalSlots; i++)
+                    {
+                        var invItem = _player.Inventory.GetItem(i);
+                        if (invItem == item) { _player.Inventory.ModifyItemQuantity(i, -1); break; }
+                    }
+                    RefreshInventory();
+                    if (_inventoryItems.Count == 0) _selectedInventoryIndex = -1;
+                    else if (_selectedInventoryIndex >= _inventoryItems.Count) _selectedInventoryIndex = _inventoryItems.Count - 1;
+                    UpdateInventoryDescription();
+                    UpdateStatusBar();
+
+                    ShowFloatingDamageNumber(_player.Position, 25, true);
+                    _gameManager.PlaySound("item.mp3", 0.6f);
                 }
             }
         }
@@ -1415,6 +1540,26 @@ namespace GameProj
                         }
                     }
                 }
+
+                if (character == _finn && _finn.IsAlive)
+                {
+                    double attackRange = 50;
+
+                    if (Vector2D.Distance(_player.Position, _finn.Position) <= attackRange)
+                    {
+                        _finn.TakeDamage(playerDamage);  // Уменьшаем здоровье
+                        hitSomething = true;
+                        ShowFloatingDamageNumber(_finn.Position, playerDamage, false);
+                        TriggerShake(2.0);
+                        _gameManager.PlaySound("attack.mp3", 0.6f);
+
+                        // Проверяем, не умер ли Finn
+                        if (!_finn.IsAlive)
+                        {
+                            _finn.SetState(CharacterState.Dead);
+                        }
+                    }
+                }
             }
 
             if (hitSomething) _attackCooldown = ATTACK_COOLDOWN_TIME;
@@ -1426,39 +1571,37 @@ namespace GameProj
         private void HandleQuestDialogue(Player player, NPC npc)
         {
             Quest quest = null;
-            bool isGirlNPC = (npc == _girl);
 
-            if (npc == _questAlly)
+            // Определяем квест через switch pattern matching
+            switch (npc)
             {
-                _availableQuests.TryGetValue("slime_quest", out quest);
-            }
-            else if (isGirlNPC)
-            {
-                if (_availableQuests.TryGetValue("girl_quest_first", out var firstQuest) && firstQuest.Status != QuestStatus.Completed)
-                {
-                    quest = firstQuest;
-                }
-                else if (_availableQuests.TryGetValue("girl_quest_second", out var secondQuest) && secondQuest.Status != QuestStatus.Completed)
-                {
-                    quest = secondQuest;
-                }
-            }
-            else if (npc == _schoolGirl)
-            {
-                _availableQuests.TryGetValue("schoolgirl_quest", out quest);
-            }
-            else if (npc == _woman)
-            {
-                _availableQuests.TryGetValue("woman_quest", out quest);
-            }
-            else if (npc == null && _gorgon != null && Vector2D.Distance(_player.Position, _gorgon.Position) <= 60)
-            {
-                _availableQuests.TryGetValue("gorgon_necklace_quest", out quest);
+                case NPC n when n == _questAlly:
+                    _availableQuests.TryGetValue("slime_quest", out quest);
+                    break;
+
+                case NPC n when n == _girl:
+                    if (_availableQuests.TryGetValue("girl_quest_first", out var firstQuest) && firstQuest.Status != QuestStatus.Completed)
+                        quest = firstQuest;
+                    else if (_availableQuests.TryGetValue("girl_quest_second", out var secondQuest) && secondQuest.Status != QuestStatus.Completed)
+                        quest = secondQuest;
+                    break;
+
+                case NPC n when n == _schoolGirl:
+                    _availableQuests.TryGetValue("schoolgirl_quest", out quest);
+                    break;
+
+                case NPC n when n == _woman:
+                    _availableQuests.TryGetValue("woman_quest", out quest);
+                    break;
+
+                case NPC n when n == null && _gorgon != null && Vector2D.Distance(_player.Position, _gorgon.Position) <= 60:
+                    _availableQuests.TryGetValue("gorgon_necklace_quest", out quest);
+                    break;
             }
 
             if (quest == null)
             {
-                if (isGirlNPC && _availableQuests.ContainsKey("girl_quest_second") &&
+                if (npc == _girl && _availableQuests.ContainsKey("girl_quest_second") &&
                     _availableQuests["girl_quest_second"].Status == QuestStatus.Completed)
                 {
                     ShowDialogue("Спасибо за всю помощь! Теперь я в безопасности.");
@@ -1466,126 +1609,132 @@ namespace GameProj
                 return;
             }
 
+            // Обработка второго квеста девушки (особый случай)
             if (quest.Id == "girl_quest_second" && quest.Status == QuestStatus.Active)
             {
-                bool hasYellowSphere = player.Inventory.GetTotalQuantity("yellow_thing") >= 1;
-                bool hasSilverSphere = player.Inventory.GetTotalQuantity("silver_thing") >= 1;
-
-                if (hasYellowSphere || hasSilverSphere)
-                {
-                    string usedSphere = hasYellowSphere ? "yellow_thing" : "silver_thing";
-                    quest.RequiredItems.Clear();
-                    quest.AddRequiredItem(usedSphere, 1);
-
-                    foreach (var reward in quest.RewardsItems)
-                    {
-                        if (_itemPrefabs.ContainsKey(reward.Key))
-                        {
-                            player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
-                        }
-                    }
-
-                    if (quest.RewardStrength > 0)
-                        player.Strength += quest.RewardStrength;
-
-                    quest.Complete();
-
-                    ShowDialogue(quest.CompletionDialogue);
-                    _gameManager?.PlaySound("item.mp3", 0.6f);
-
-                    if (_isQuestLogOpen) RefreshQuestLog();
-                    if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
-                    return;
-                }
-                else
-                {
-                    ShowDialogue("Принеси магическую сферу, если найдешь. Говорят, они где-то в этом лесу...");
-                    return;
-                }
+                HandleGirlSecondQuest(player, quest);
+                return;
             }
 
-            if (quest.Status == QuestStatus.NotStarted)
+            // Основная логика обработки квеста
+            switch (quest.Status)
             {
-                quest.Start();
-                ShowDialogue(quest.StartDialogue);
+                case QuestStatus.NotStarted:
+                    quest.Start();
+                    ShowDialogue(quest.StartDialogue);
+                    if (_isQuestLogOpen) RefreshQuestLog();
+                    break;
+
+                case QuestStatus.Active:
+                    HandleActiveQuest(player, quest);
+                    break;
+
+                case QuestStatus.Completed:
+                    ShowDialogue(quest.AlreadyCompletedDialogue);
+                    break;
+            }
+        }
+
+        private void HandleGirlSecondQuest(Player player, Quest quest)
+        {
+            bool hasYellowSphere = player.Inventory.GetTotalQuantity("yellow_thing") >= 1;
+            bool hasSilverSphere = player.Inventory.GetTotalQuantity("silver_thing") >= 1;
+
+            if (hasYellowSphere || hasSilverSphere)
+            {
+                string usedSphere = hasYellowSphere ? "yellow_thing" : "silver_thing";
+                quest.RequiredItems.Clear();
+                quest.AddRequiredItem(usedSphere, 1);
+
+                foreach (var reward in quest.RewardsItems)
+                {
+                    if (_itemPrefabs.ContainsKey(reward.Key))
+                    {
+                        player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
+                    }
+                }
+
+                if (quest.RewardStrength > 0)
+                    player.Strength += quest.RewardStrength;
+
+                quest.Complete();
+                ShowDialogue(quest.CompletionDialogue);
+                _gameManager?.PlaySound("item.mp3", 0.6f);
+
                 if (_isQuestLogOpen) RefreshQuestLog();
-                return;
+                if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
+            }
+            else
+            {
+                ShowDialogue("Принеси магическую сферу, если найдешь. Говорят, они где-то в этом лесу...");
+            }
+        }
+
+        private void HandleActiveQuest(Player player, Quest quest)
+        {
+            bool isComplete = quest.RequiresEnemyKill ? quest.EnemyDefeated : quest.IsComplete(player.Inventory);
+
+            if (isComplete)
+            {
+                CompleteQuest(player, quest);
+            }
+            else
+            {
+                ShowQuestProgress(player, quest);
+            }
+        }
+
+        private void CompleteQuest(Player player, Quest quest)
+        {
+            if (!quest.RequiresEnemyKill)
+            {
+                foreach (var required in quest.RequiredItems)
+                {
+                    player.Inventory.RemoveItem(required.Key, required.Value);
+                }
             }
 
-            if (quest.Status == QuestStatus.Active)
+            foreach (var reward in quest.RewardsItems)
             {
-                bool isComplete = false;
-
-                if (quest.RequiresEnemyKill)
+                if (_itemPrefabs.ContainsKey(reward.Key))
                 {
-                    isComplete = quest.EnemyDefeated;
+                    player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
                 }
-                else
-                {
-                    isComplete = quest.IsComplete(player.Inventory);
-                }
-
-                if (isComplete)
-                {
-                    if (!quest.RequiresEnemyKill)
-                    {
-                        foreach (var required in quest.RequiredItems)
-                        {
-                            player.Inventory.RemoveItem(required.Key, required.Value);
-                        }
-                    }
-
-                    foreach (var reward in quest.RewardsItems)
-                    {
-                        if (_itemPrefabs.ContainsKey(reward.Key))
-                        {
-                            player.Inventory.AddItem(_itemPrefabs[reward.Key], reward.Value);
-                        }
-                    }
-
-                    if (quest.RewardStrength > 0)
-                        player.Strength += quest.RewardStrength;
-
-                    quest.Complete();
-
-                    ShowDialogue(quest.CompletionDialogue);
-                    _gameManager?.PlaySound("item.mp3", 0.6f);
-
-                    if (_isQuestLogOpen) RefreshQuestLog();
-                    if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
-
-                }
-                else
-                {
-                    if (quest.RequiresEnemyKill)
-                    {
-                        ShowDialogue($"Ты еще не победил {quest.RequiredEnemyType}. Будь осторожен!");
-                    }
-                    else
-                    {
-                        string missingItems = "";
-                        foreach (var req in quest.RequiredItems)
-                        {
-                            int has = player.Inventory.GetTotalQuantity(req.Key);
-                            if (has < req.Value)
-                            {
-                                var item = _itemPrefabs.ContainsKey(req.Key) ? _itemPrefabs[req.Key] : null;
-                                string itemName = item != null ? item.Name : req.Key;
-                                missingItems += $"\n  • {itemName}: {has}/{req.Value}";
-                            }
-                        }
-                        if (!string.IsNullOrEmpty(missingItems))
-                            ShowDialogue($"Ты еще не собрал все предметы:{missingItems}");
-                        else
-                            ShowDialogue("Ты еще не собрал все предметы. Приходи, когда соберешь.");
-                    }
-                }
-                return;
             }
 
-            if (quest.Status == QuestStatus.Completed)
+            if (quest.RewardStrength > 0)
+                player.Strength += quest.RewardStrength;
+
+            quest.Complete();
+            ShowDialogue(quest.CompletionDialogue);
+            _gameManager?.PlaySound("item.mp3", 0.6f);
+
+            if (_isQuestLogOpen) RefreshQuestLog();
+            if (InventoryPanel.Visibility == Visibility.Visible) UpdateStatusBar();
+        }
+
+        private void ShowQuestProgress(Player player, Quest quest)
+        {
+            if (quest.RequiresEnemyKill)
             {
-                ShowDialogue(quest.AlreadyCompletedDialogue);
+                ShowDialogue($"Ты еще не победил {quest.RequiredEnemyType}. Будь осторожен!");
+            }
+            else
+            {
+                string missingItems = "";
+                foreach (var req in quest.RequiredItems)
+                {
+                    int has = player.Inventory.GetTotalQuantity(req.Key);
+                    if (has < req.Value)
+                    {
+                        var item = _itemPrefabs.ContainsKey(req.Key) ? _itemPrefabs[req.Key] : null;
+                        string itemName = item != null ? item.Name : req.Key;
+                        missingItems += $"\n  • {itemName}: {has}/{req.Value}";
+                    }
+                }
+                ShowDialogue(string.IsNullOrEmpty(missingItems)
+                    ? "Ты еще не собрал все предметы. Приходи, когда соберешь."
+                    : $"Ты еще не собрал все предметы:{missingItems}");
             }
         }
 
@@ -1760,12 +1909,19 @@ namespace GameProj
 
         public void Restart()
         {
+            WriteLog("");
+            WriteLog("ПЕРЕЗАПУСК ИГРЫ");
+
             _gameTimer?.Stop();
             _spawnTimer?.Stop();
 
             GameOverBox.Visibility = Visibility.Collapsed;
             InventoryPanel.Visibility = Visibility.Collapsed;
             DialogueBox.Visibility = Visibility.Collapsed;
+
+            // Скрываем панель громкости при рестарте
+            VolumePanel.Visibility = Visibility.Collapsed;
+
             _isQuestLogOpen = false;
             _dialogueQueue.Clear();
 
@@ -1780,7 +1936,7 @@ namespace GameProj
             _currentBeeCount = 0;
             _gorgonInteractionCount = 0;
             _attackCooldown = 0.4;
-            _currentZoom = 1.0;
+            _currentZoom = 1.5;
             if (_cameraScale != null)
             {
                 _cameraScale.ScaleX = _currentZoom;
@@ -1839,7 +1995,10 @@ namespace GameProj
             RefreshQuestLog();
             UpdateStatusBar();
 
+            _gameManager.PlayMusic("soundtrack.mp3");
+            _gameManager.SetMusicVolume(0.1);
             StartSpawnTimer();
+            WriteLog("начальное состояние Tutorial (после рестарта)");
             _gameManager.SetState(State_.Tutorial);
             StartGameLoop();
 
@@ -1978,10 +2137,22 @@ namespace GameProj
                     Keyboard.IsKeyDown(Key.A) || Keyboard.IsKeyDown(Key.D) ||
                     Keyboard.IsKeyDown(Key.E) || Keyboard.IsKeyDown(Key.I))
                 {
+                    string keyName = "";
+                    if (Keyboard.IsKeyDown(Key.W)) keyName = "W";
+                    else if (Keyboard.IsKeyDown(Key.S)) keyName = "S";
+                    else if (Keyboard.IsKeyDown(Key.A)) keyName = "A";
+                    else if (Keyboard.IsKeyDown(Key.D)) keyName = "D";
+                    else if (Keyboard.IsKeyDown(Key.E)) keyName = "E";
+                    else if (Keyboard.IsKeyDown(Key.I)) keyName = "I";
+
+                    WriteLog($"нажата клавиша {keyName}");
+                    WriteLog($"отправлено событие TutorialCompleted");
+                    WriteLog($"переход Tutorial - Game");
+
                     _tutorialCompleted = true;
-                    _gameManager.SetState(State_.Game);
-                    return;
+                    _gameManager.SendEvent(Event_.TutorialCompleted);
                 }
+                return;
             }
 
             Vector2D dir = Vector2D.Zero;
@@ -1994,13 +2165,33 @@ namespace GameProj
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
+{
+    // Перезапуск по R
+    if (e.Key == Key.R)
+    {
+        Restart();
+        e.Handled = true;
+        return;
+    }
+
+    // Открытие панели громкости по K
+    if (e.Key == Key.K)
+    {
+        ToggleVolumePanel();
+        e.Handled = true;
+        return;
+    }
+
+    // Если панель громкости открыта, игнорируем остальные клавиши
+    if (VolumePanel.Visibility == Visibility.Visible)
+    {
+        if (e.Key == Key.Escape || e.Key == Key.K)
         {
-            if (e.Key == Key.R)
-            {
-                Restart();
-                e.Handled = true;
-                return;
-            }
+            ToggleVolumePanel();
+            e.Handled = true;
+        }
+        return;
+    }
 
             base.OnKeyDown(e);
 
@@ -2076,5 +2267,35 @@ namespace GameProj
         }
 
         protected override void OnKeyUp(KeyEventArgs e) { base.OnKeyUp(e); e.Handled = true; }
+
+        private void MusicVolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_gameManager != null)
+            {
+                _gameManager.SetMusicVolume(e.NewValue);
+                _gameManager.SetSFXVolume(e.NewValue); 
+            }
+        }
+
+        private void ToggleVolumePanel()
+        {
+            if (VolumePanel.Visibility == Visibility.Visible)
+            {
+                VolumePanel.Visibility = Visibility.Collapsed;
+                Focus(); // Возвращаем фокус на игровое поле
+            }
+            else
+            {
+                // Обновляем значение слайдера текущей громкостью
+                if (_gameManager != null)
+                {
+                    MusicVolumeSlider.Value = _gameManager.GetMusicVolume();
+                }
+                VolumePanel.Visibility = Visibility.Visible;
+                VolumePanel.Focusable = true;
+                VolumePanel.Focus();
+            }
+        }
     }
+
 }
